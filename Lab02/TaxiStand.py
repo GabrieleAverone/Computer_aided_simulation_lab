@@ -1,7 +1,13 @@
 
 import numpy as np
 from User import User
-from helpers import manhattan_distance
+
+"""
+    
+    TO-DO:
+        La coda onlineQueue è da mettere dentro TaxiStands perché è una coda condivisa con tutti gli stand di Taxi
+        
+"""
 
 class TaxiStand:
     
@@ -34,6 +40,12 @@ class TaxiStand:
         
     def getTaxi(self):
         self.nTaxi -= 1
+    
+    
+    def hasWaitingUser(self) -> bool:
+        
+        if len(self.inLocoQueue) > 0 or len(self.onLineQueue) > 0: return True
+        else: return False
     
     
     def getUser(self) -> tuple[User, bool]:
