@@ -18,10 +18,22 @@ class Event():
     def sortKey(self) -> tuple[int, int]:
         
         return self.time, self.counter
+    
+    
+    def getTime(self) -> int:
+        return self.time
+    
+    
+    def getType(self) -> str:
+        return self.eventType
+    
+    
+    def getUser(self) -> User | None:
+        return self.user
 
 
 
-class FES:
+class FutureEventSet:
     
     def __init__(self):
         self.queue = []
