@@ -2,27 +2,31 @@
 
 class User:
     
+    _counter = 0
+    
     def __init__(self, spawnTime: int, spawnPos: tuple[int, int], destPos: tuple[int, int], inLoco: bool) -> None:
         
         self.spawTime = spawnTime
         self.spawnPos = spawnPos
         self.destPos = destPos
-        self.nextPos = None
-        self.inLoco = inLoco
-        self.arrivalToStand = None
+        self.inLocoFlag = inLoco
+        self.arrivalTimeToStand = None
+        
+        self.counter = User._counter
+        User._counter += 1
         
         
-    def getArrivalTime(self) -> int:
+    def getArrivalToStandTime(self) -> int:
         
-        if self.arrivalToStand is not None:
-            return self.arrivalToStand
+        if self.arrivalTimeToStand is not None:
+            return self.arrivalTimeToStand
         
         else:
             raise ValueError("The field arrivalToStand is not definied")
         
         
     def getInLocoFlag(self) -> bool:
-        return self.inLoco
+        return self.inLocoFlag
     
     
     def getSPawnLocation(self) -> tuple[int, int]:
@@ -31,14 +35,17 @@ class User:
             
     def setNextLocation(self, coord: tuple[int, int]) -> None:
         self.nextPos = coord
-        
-    def getNextLocation(self) -> tuple[int, int]:
-        if self.nextPos is None:
-            raise ValueError("QUalcosa non funziona")
-        
-        return self.nextPos
     
     
     def getDestination(self) -> tuple[int, int]:
         return self.destPos
+    
+    def setArrivalToStandTime(self, time: int) -> None:
+        self.arrivalTimeToStand = time
+    
+    def __str__(self):
+        return f"{self.counter}"
+    
+    def __repr__(self):
+        return f"{self.counter}"
     

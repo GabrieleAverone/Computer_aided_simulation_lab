@@ -51,7 +51,7 @@ class TaxiStand:
     def getUser(self) -> User:
         
         if len(self.userQueue) > 0:
-            return self.userQueue.pop()
+            return self.userQueue.pop(0)
         else:
             raise ValueError
         
@@ -64,10 +64,6 @@ class TaxiStand:
     def getNextUserTime(self) -> int:
         
         return self.userQueue[0].getArrivalToStandTime()
-            
-            
-    def updateDiscardOnline(self):
-        self.discardOnlineUser += 1
         
         
     def getCapacity(self) -> int:
@@ -76,6 +72,13 @@ class TaxiStand:
     
     def assignTaxis(self, nTaxi: int) -> None:
         self.nTaxi += nTaxi
+        
+    def __str__(self):
+        return f"{self.pos} -- {self.nTaxi}"
+    
+    def __repr__(self) -> str:
+        return f"Location: {self.pos} -- idleTaxi: {self.nTaxi} -- queue: {len(self.userQueue)}"
+        
         
     
     
@@ -93,6 +96,7 @@ class TaxiStands():
             self.stands[pos[i]] =  TaxiStand(pos[i], capacity[i])
             
         self.coords = np.array(pos)
+        self.pos = pos
         
         self.totalCapacity = 0
         for cap in capacity:
@@ -111,32 +115,31 @@ class TaxiStands():
         if policy == "uniform":
             remaining = nTaxi
             taxiPerStand = nTaxi // self.nStands
-            
-            for i in range(self.nStands):
-                if self.stands[self.coords[i]].getCapacity() <= taxiPerStand:
-                    self.stands[self.coords[i]].assignTaxis(taxiPerStand)
-                    remaining -= taxiPerStand
-                else:
-                    self.stands[self.coords[i]].assignTaxis(self.stands[self.coords[i]].getCapacity())
-                    remaining -= self.stands[self.coords[i]].getCapacity()
-            
+
+            for p in self.pos:
+                n = min(taxiPerStand, self.stands[p].getCapacity())
+                self.stands[p].assignTaxis(n)
+                remaining -= n
+
             while remaining > 0:
-                for i in range(self.nStands):
-                    if self.stands[self.coords[i]].hasFreeSpot():
-                        self.stands[self.coords[i]].assignTaxis(1)
+                for p in self.pos:
+                    if remaining == 0:
+                        break
+                    if self.stands[p].hasFreeSpot():
+                        self.stands[p].assignTaxis(1)
                         remaining -= 1
                         
         else: raise ValueError("Policy non recognised")
-                    
+        
+    
+    def walkToStand(self, coord: tuple[int, int]) -> tuple[int, int]:
+        # il cliente va nello stand più vicino, senza sapere se ci sono taxi
+        pos = np.array(coord, dtype=int)
 
-    def findNearestTaxiStand(self, coord: tuple[int, int]) -> tuple[int, int]:
-        taxiPos = np.array(coord, dtype=int)
+        dist = np.abs(pos[0] - self.coords[:, 0]) + np.abs(pos[1] - self.coords[:, 1])
 
-        dist = abs(taxiPos[0] - self.coords[:, 0]) + abs(taxiPos[1] - self.coords[:, 1])
-        minIndex = int(np.argmin(dist))
-        minDistCoord = (int(self.coords[minIndex, 0]), int(self.coords[minIndex, 1]))
-
-        return self.stands[minDistCoord].pos
+        i = int(np.argmin(dist))
+        return self.stands[(int(self.coords[i, 0]), int(self.coords[i, 1]))].pos
     
     
     def taxiCall(self, coord: tuple[int, int]) -> tuple[int, int]:
@@ -146,33 +149,43 @@ class TaxiStands():
         validi = np.array([self.stands[(int(x), int(y))].hasIdleTaxi() for x, y in self.coords])
 
         if not validi.any():
-            raise ValueError("Nessun parcheggio con taxi liberi")
+            raise ValueError  # nessun taxi libero: il chiamante mette lo user in onlineQueue
 
         i = np.flatnonzero(validi)[np.argmin(dist[validi])]
         return self.stands[(int(self.coords[i, 0]), int(self.coords[i, 1]))].pos
-                
-                
+
+
+    def findFreeStand(self, coord: tuple[int, int]) -> tuple[int, int]:
+        # come taxiCall, ma cerca lo stand più vicino con posti liberi
+        pos = np.array(coord, dtype=int)
+
+        dist = np.abs(pos[0] - self.coords[:, 0]) + np.abs(pos[1] - self.coords[:, 1])
+        validi = np.array([self.stands[(int(x), int(y))].hasFreeSpot() for x, y in self.coords])
+
+        if not validi.any():
+            raise ValueError
+
+        i = np.flatnonzero(validi)[np.argmin(dist[validi])]
+        return self.stands[(int(self.coords[i, 0]), int(self.coords[i, 1]))].pos
+
+
     def taxiArrival(self, standLocation: tuple[int, int]) -> bool:
-        
         if self.stands[standLocation].hasFreeSpot():
-            
             self.stands[standLocation].insertTaxi()
             self.totalIdleTaxi += 1
             return True
-        
         else:
-            return False
+            return False  # stand pieno: il chiamante usa findFreeStand per reindirizzare il taxi
         
     
-    def taxiDeparture(self, standLocation: tuple[int, int]) -> bool:
+    def taxiDeparture(self, standLocation: tuple[int, int]):
         
         if self.stands[standLocation].hasIdleTaxi():
             self.totalIdleTaxi -= 1
             self.stands[standLocation].getTaxi()
             return True
 
-        else:
-            return False
+        raise ValueError
         
         
     def insertUserInLoco(self, standLocation: tuple[int, int], user: User) -> None:
@@ -187,13 +200,17 @@ class TaxiStands():
     
     def getUser(self, standLocation: tuple[int, int]) -> tuple[User, bool]:
         
-        inLocoTime = self.stands[standLocation].getNextUserTime()
-        
-        if inLocoTime <= self.onlineQueue[0].getArrivalToStandTime():
+        if len(self.onlineQueue) == 0:
             return self.stands[standLocation].getUser(), True
         
+        if not self.stands[standLocation].hasWaitingUser():
+            return self.onlineQueue.pop(0), False
+        
+        inLocoTime = self.stands[standLocation].getNextUserTime()
+        if inLocoTime < self.onlineQueue[0].getArrivalToStandTime():
+            return self.stands[standLocation].getUser(), True
         else:
-            return self.onlineQueue.pop(), False
+            return self.onlineQueue.pop(0), False
     
     
     def existsIdleTaxi(self) -> bool:
@@ -214,7 +231,7 @@ class TaxiStands():
     
     def getOnLineUser(self) -> User:
         
-        return self.onlineQueue.pop()
+        return self.onlineQueue.pop(0)
     
     
     def hasFreeSpace(self, standLocation: tuple[int, int]) -> bool:
@@ -225,4 +242,7 @@ class TaxiStands():
     def hasWaitingUser(self, standLocation: tuple[int, int]) -> bool:
         
         return len(self.onlineQueue) > 0 or self.stands[standLocation].hasWaitingUser()
+    
+    def __str__(self):
+        return f"TaxiStands: {self.stands.values()}\nOnlineQueue: {self.onlineQueue}"
             
