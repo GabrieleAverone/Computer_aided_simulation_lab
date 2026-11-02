@@ -1,19 +1,32 @@
+from typing import TextIO
+
 from TaxiStand import TaxiStands
 from User import User
-from FutureEventSet import FutureEventSet, Event
-from helpers import *
+from Events import Event
+from FutureEventSet import FutureEventSet
+from helpers import (
+    coinToss,
+    getNewLocation,
+    getNewSpawnTime,
+    getTimeByFoot,
+    getTimeByTaxi,
+    manhattanDistance,
+)
 
 """
-    TO-DO:          
+    TO-DO:
         - aggiungere le statistiche, probabilemte con una classe metrics fatta di contatori o robe del genere
 
 """
 
 
+# ============================== PARAMETERS ==============================
 
 LOG = True
+LOG_FILE_NAME = "logFile.txt"
+LOG_SEPARATOR_LENGTH = 60
 
-# Parameteres for taxi and taxi stands: 
+# Parameteres for taxi and taxi stands:
 N_STAND = 3
 N_TAXI = 6
 CAPACITY = [2, 2, 2]
@@ -21,368 +34,252 @@ POLICY = "uniform"
 
 # Parameters for Users:
 REACH_PROB = 0.5
+MIN_TRIP_DISTANCE = 10      # distanza minima (Manhattan) tra spawn e destinazione
 
 # Parameters for the simulation:
 MAX_TIME = 1000
 
 
-standsCoord: list[tuple[int, int]] = []
-for i in range(N_STAND):
-    standsCoord.append(getNewLocation())
-    
-taxiStands = TaxiStands(CAPACITY, standsCoord)
-taxiStands.distributeTaxi(N_TAXI, policy=POLICY)
+logFile: TextIO | None = None
 
-FES = FutureEventSet()
-time = 0
 
-# Simulation Initialization:
+# ================================ LOGGING ================================
 
-spawnTime = time
-        
-spawnLocation = getNewLocation()
-destination = getNewLocation()
-while manhattanDistance(spawnLocation, destination) < 10: 
+def writeLog(message: str = "") -> None:
+    """Scrive una riga nel file di log (solo se LOG è attivo)."""
+    if LOG and logFile is not None:
+        logFile.write(message + "\n")
+
+
+def logState(iteration: int, time: int, FES: FutureEventSet, taxiStands: TaxiStands, currentEvent: Event) -> None:
+    """Scrive lo stato della simulazione all'inizio di ogni iterazione."""
+    writeLog()
+    writeLog("=" * LOG_SEPARATOR_LENGTH)
+    writeLog(f"Iteration: {iteration} -- Time: {time}")
+    writeLog("=" * LOG_SEPARATOR_LENGTH)
+    writeLog(f"FES:\n{FES}")
+    writeLog(f"taxiStands:\n{taxiStands}")
+    writeLog(f"Current event: {currentEvent!r}")
+
+    currentUser = currentEvent.getUser()
+    if currentUser is not None:
+        writeLog(f"Current user: {currentUser.describe()}")
+
+
+def insertAndLogEvent(FES: FutureEventSet, event: Event) -> None:
+    FES.insertEvent(event)
+    writeLog(f"Event insertion: {event!r}")
+
+
+# ============================== HELPERS ==================================
+
+def createSpawnEvent(spawnTime: int) -> Event:
+    """Crea un nuovo utente e il relativo evento CLIENT_SPAWN."""
     spawnLocation = getNewLocation()
     destination = getNewLocation()
-    
-inLoco = True if coinToss(REACH_PROB) > REACH_PROB else False
-newUser = User(spawnTime, spawnLocation, destination, inLoco)
-newEvent = Event("CLIENT_SPAWN", spawnTime, spawnLocation, newUser)
-FES.insertEvent(newEvent)
+    while manhattanDistance(spawnLocation, destination) < MIN_TRIP_DISTANCE:
+        spawnLocation = getNewLocation()
+        destination = getNewLocation()
 
-def log_state(time, FES, taxiStands, eventType, f):
-    """Aggiunge al file lo stato corrente della simulazione."""
-    f.write("=" * 20)
-    f.write(f"Time: {time}")
-    f.write(f"FES:\n{FES}")
-    f.write(f"taxiStands:\n{taxiStands}")
-    f.write(f"CurrentEvent: {eventType}")
+    inLoco = coinToss(REACH_PROB)
 
-if not LOG:
-    while True:
-        
-        currentEvent = FES.getEvent()
-        time = currentEvent.getTime()
-        eventType = currentEvent.getType()
-        
-        if time > MAX_TIME: break
-        
-        if eventType == "CLIENT_SPAWN":
-            
-            # schedule next client spawn event
-            newSpawnTime = time + getNewSpawnTime()
-            
-            newSpawnLocation = getNewLocation()
-            newDestination = getNewLocation()
-            while manhattanDistance(newSpawnLocation, newDestination) < 10: 
-                newSpawnLocation = getNewLocation()
-                newDestination = getNewLocation()
-                
-            newInLoco = coinToss(REACH_PROB)
-            
-            newUser = User(newSpawnTime, newSpawnLocation, newDestination, newInLoco)
-            newEvent = Event("CLIENT_SPAWN", newSpawnTime, newSpawnLocation, newUser)
-            FES.insertEvent(newEvent)
-            
-            # Compute user action
-            currentUser = currentEvent.getUser()
-            
-            if currentUser is None:
-                raise ValueError("User is not definied for CLIENT_SPAWN type event")
-            
-            if currentUser.getInLocoFlag():
-                nearestStandLocation = taxiStands.walkToStand(currentUser.getSPawnLocation())
-                timeToStand = getTimeByFoot(currentUser.getSPawnLocation(), nearestStandLocation)
-                arrivalTime = time + timeToStand
-                currentUser.setNextLocation(nearestStandLocation)
-                currentUser.setArrivalToStandTime(arrivalTime)
-                arrivalToStand = Event("USER_ARRIVAL_TO_STAND", arrivalTime, nearestStandLocation, currentUser)
-                FES.insertEvent(arrivalToStand)
-            
-            else:
-                if taxiStands.existsIdleTaxi():
-                    standLocation = taxiStands.taxiCall(currentUser.getSPawnLocation())
-                    timeToUser = getTimeByTaxi(standLocation, currentUser.getSPawnLocation())
-                    arrivalTime = time + timeToUser
-                    taxiStands.taxiDeparture(standLocation)
-                    currentUser.setNextLocation(currentUser.getSPawnLocation())
-                    arrivalTouser = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, currentUser.getSPawnLocation(), currentUser)
-                    FES.insertEvent(arrivalTouser)
-                    
-                else:
-                    taxiStands.insertUserOnLine(currentUser)
-                    
-        elif eventType == "USER_ARRIVAL_TO_STAND":
-            currentUser = currentEvent.getUser()
-            if currentUser is None:
-                        raise ValueError("User is not definied for USER_ARRIVAL_TO_STAND type event")
-                    
-            standLocation = currentEvent.getLocation()
-            
-            if taxiStands.isIdle(standLocation):
-                timeToDestination = getTimeByTaxi(standLocation, currentUser.getDestination())
-                arrivalTime = time + timeToDestination
-                
-                taxiStands.taxiDeparture(standLocation)
-                nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
-                FES.insertEvent(nextEvent)
-            else:
-                taxiStands.insertUserInLoco(standLocation, currentUser)
-                
-        elif eventType == "TAXI_ARRIVAL_TO_USER":
-            currentUser = currentEvent.getUser()
-            if currentUser is None:
-                raise ValueError("User is not definied for USER_ARRIVAL_TO_STAND type event")
-            
-            timeToDestination = getTimeByTaxi(currentEvent.getLocation(), currentUser.getDestination())
-            arrivalTime = time + timeToDestination
-            
-            nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
-            FES.insertEvent(nextEvent)
-            
-        elif eventType == "ARRIVAL_TO_DESTINATION":
-            currentUser = currentEvent.getUser()
-            
-            if currentUser is None:
-                        raise ValueError("User is not definied for ARRIVAL_TO_DESTINATION type event")
-                    
-            if taxiStands.hasUserOnLine():
-                nextUser = taxiStands.getOnLineUser()
-                timeToUser = getTimeByTaxi(currentUser.getDestination(), nextUser.getSPawnLocation())
-                arrivalTime = time + timeToUser
-                
-                nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, nextUser.getSPawnLocation(), nextUser)
-                FES.insertEvent(nextEvent)
-                
-            else:
-                nearestTaxiStand = taxiStands.findFreeStand(currentEvent.getLocation())
-                timeToStand = getTimeByTaxi(currentEvent.getLocation(), nearestTaxiStand)
-                arrivalTime = time + timeToStand
-                
-                nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nearestTaxiStand, None)
-                FES.insertEvent(nextEvent)
-                
-        elif eventType == "TAXI_ARRIVAL_TO_STAND":
-            
-            standLocation = currentEvent.getLocation()
-            
-            if taxiStands.hasWaitingUser(currentEvent.getLocation()):
-                
-                nextUser, inLocoFlag = taxiStands.getUser(standLocation)
-                
-                if inLocoFlag:
-                    destination = nextUser.getDestination()
-                    timeToDestination = getTimeByTaxi(standLocation, destination)
-                    arrivalTime = time + timeToDestination
-                    
-                    nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, destination, nextUser)
-                    FES.insertEvent(nextEvent)
-                    
-                else:
-                    destination = nextUser.getSPawnLocation()
-                    timeToUser = getTimeByTaxi(standLocation, destination)
-                    arrivalTime = time + timeToUser
-                    
-                    nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, destination, nextUser) 
-                    FES.insertEvent(nextEvent)  
-                    
-            elif taxiStands.hasFreeSpace(standLocation):
-                taxiStands.taxiArrival(standLocation)
-                
-            else:
-                nextStandLocation = taxiStands.findFreeStand(standLocation)
-                timeToStand = getTimeByTaxi(standLocation, nextStandLocation)
-                arrivalTime = time + timeToStand
-                
-                nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nextStandLocation, None)      
-                FES.insertEvent(nextEvent)  
-                
+    newUser = User(spawnTime, spawnLocation, destination, inLoco)
+    return Event("CLIENT_SPAWN", spawnTime, spawnLocation, newUser)
+
+
+def getEventUser(event: Event) -> User:
+    user = event.getUser()
+    if user is None:
+        raise ValueError(f"User is not defined for {event.getType()} type event")
+    return user
+
+
+# ============================ EVENT HANDLERS ============================
+
+def handleClientSpawn(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+
+    # schedule next client spawn event
+    newSpawnTime = time + getNewSpawnTime()
+    insertAndLogEvent(FES, createSpawnEvent(newSpawnTime))
+
+    # Compute user action
+    currentUser = getEventUser(currentEvent)
+
+    if currentUser.getInLocoFlag():
+        nearestStandLocation = taxiStands.walkToStand(currentUser.getSpawnLocation())
+        timeToStand = getTimeByFoot(currentUser.getSpawnLocation(), nearestStandLocation)
+        arrivalTime = time + timeToStand
+        currentUser.setNextLocation(nearestStandLocation)
+        currentUser.setArrivalToStandTime(arrivalTime)
+        arrivalToStand = Event("USER_ARRIVAL_TO_STAND", arrivalTime, nearestStandLocation, currentUser)
+        insertAndLogEvent(FES, arrivalToStand)
+
+    else:
+        if taxiStands.existsIdleTaxi():
+            standLocation = taxiStands.findIdleStand(currentUser.getSpawnLocation())
+            timeToUser = getTimeByTaxi(standLocation, currentUser.getSpawnLocation())
+            arrivalTime = time + timeToUser
+            taxiStands.taxiDeparture(standLocation)
+            writeLog(f"Taxi departed from stand {standLocation}")
+            currentUser.setNextLocation(currentUser.getSpawnLocation())
+            arrivalToUser = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, currentUser.getSpawnLocation(), currentUser)
+            insertAndLogEvent(FES, arrivalToUser)
+
         else:
-            raise ValueError(f"Evento non gestito: {eventType}")
-        
-        
-else:
-    f = open("logFile.txt", "w")
-    
+            taxiStands.insertOnlineUser(currentUser)
+            currentUser.setCallTaxiTime(time)
+            writeLog("User inserted in online queue")
+
+
+def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+
+    currentUser = getEventUser(currentEvent)
+    standLocation = currentEvent.getLocation()
+
+    if taxiStands.isIdle(standLocation):
+        timeToDestination = getTimeByTaxi(standLocation, currentUser.getDestination())
+        arrivalTime = time + timeToDestination
+
+        taxiStands.taxiDeparture(standLocation)
+        writeLog(f"Taxi departed from stand {standLocation}")
+        nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
+        insertAndLogEvent(FES, nextEvent)
+
+    else:
+        taxiStands.insertInLocoUser(standLocation, currentUser)
+        writeLog(f"User inserted in in-loco queue of stand {standLocation}")
+
+
+def handleTaxiArrivalToUser(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+
+    currentUser = getEventUser(currentEvent)
+
+    timeToDestination = getTimeByTaxi(currentEvent.getLocation(), currentUser.getDestination())
+    arrivalTime = time + timeToDestination
+
+    nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
+    insertAndLogEvent(FES, nextEvent)
+
+
+def handleArrivalToDestination(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+
+    currentUser = getEventUser(currentEvent)
+
+    if taxiStands.hasOnlineUser():
+        nextUser = taxiStands.getOnlineUser()
+        writeLog(f"Taxi serves the first user of the online queue: user {nextUser}")
+        timeToUser = getTimeByTaxi(currentUser.getDestination(), nextUser.getSpawnLocation())
+        arrivalTime = time + timeToUser
+
+        nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, nextUser.getSpawnLocation(), nextUser)
+        insertAndLogEvent(FES, nextEvent)
+
+    else:
+        nearestTaxiStand = taxiStands.findFreeStand(currentEvent.getLocation())
+        writeLog(f"No user in online queue: taxi goes to stand {nearestTaxiStand}")
+        timeToStand = getTimeByTaxi(currentEvent.getLocation(), nearestTaxiStand)
+        arrivalTime = time + timeToStand
+
+        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nearestTaxiStand, None)
+        insertAndLogEvent(FES, nextEvent)
+
+
+def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+
+    standLocation = currentEvent.getLocation()
+
+    if taxiStands.hasWaitingUser(standLocation):
+
+        nextUser, inLocoFlag = taxiStands.getUser(standLocation)
+
+        if inLocoFlag:
+            writeLog(f"Taxi at stand {standLocation} picks up in-loco user {nextUser}")
+            destination = nextUser.getDestination()
+            timeToDestination = getTimeByTaxi(standLocation, destination)
+            arrivalTime = time + timeToDestination
+
+            nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, destination, nextUser)
+            insertAndLogEvent(FES, nextEvent)
+
+        else:
+            writeLog(f"Taxi at stand {standLocation} goes to online user {nextUser}")
+            destination = nextUser.getSpawnLocation()
+            timeToUser = getTimeByTaxi(standLocation, destination)
+            arrivalTime = time + timeToUser
+
+            nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, destination, nextUser)
+            insertAndLogEvent(FES, nextEvent)
+
+    elif taxiStands.hasFreeSpot(standLocation):
+        taxiStands.taxiArrival(standLocation)
+        writeLog(f"Taxi parked in stand {standLocation}")
+
+    else:
+        nextStandLocation = taxiStands.findFreeStand(standLocation)
+        writeLog(f"Stand {standLocation} is full: taxi redirected to stand {nextStandLocation}")
+        timeToStand = getTimeByTaxi(standLocation, nextStandLocation)
+        arrivalTime = time + timeToStand
+
+        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nextStandLocation, None)
+        insertAndLogEvent(FES, nextEvent)
+
+
+EVENT_HANDLERS = {
+    "CLIENT_SPAWN": handleClientSpawn,
+    "USER_ARRIVAL_TO_STAND": handleUserArrivalToStand,
+    "TAXI_ARRIVAL_TO_USER": handleTaxiArrivalToUser,
+    "ARRIVAL_TO_DESTINATION": handleArrivalToDestination,
+    "TAXI_ARRIVAL_TO_STAND": handleTaxiArrivalToStand,
+}
+
+
+# =============================== SIMULATION ===============================
+
+def runSimulation() -> None:
+    global logFile
+
+    # Simulation Initialization:
+    standsCoord: list[tuple[int, int]] = []
+    for i in range(N_STAND):
+        standsCoord.append(getNewLocation())
+
+    taxiStands = TaxiStands(CAPACITY, standsCoord)
+    taxiStands.distributeTaxi(N_TAXI, policy=POLICY)
+
+    FES = FutureEventSet()
+    time = 0
+    FES.insertEvent(createSpawnEvent(time))
+
+    if LOG:
+        logFile = open(LOG_FILE_NAME, "w")
+
     try:
+        iteration = 0
         while True:
-                
-                currentEvent = FES.getEvent()
-                time = currentEvent.getTime()
-                eventType = currentEvent.getType()
-                
-                f.write("=" * 20)
-                f.write("\n")
-                f.write(f"Time: {time}\n")
-                f.write(f"FES:\n{FES}")
-                f.write("\n")
-                f.write(f"taxiStands:\n{taxiStands}")
-                f.write("\n")
-                f.write(f"CurrentEvent: {eventType}")
-                f.write("\n")
-                                
-                if time > MAX_TIME: break
-                
-                if eventType == "CLIENT_SPAWN":
-                    
-                    # schedule next client spawn event
-                    newSpawnTime = time + getNewSpawnTime()
-                    
-                    newSpawnLocation = getNewLocation()
-                    newDestination = getNewLocation()
-                    while manhattanDistance(newSpawnLocation, newDestination) < 10: 
-                        newSpawnLocation = getNewLocation()
-                        newDestination = getNewLocation()
-                        
-                    newInLoco = coinToss(REACH_PROB)
-                    
-                    newUser = User(newSpawnTime, newSpawnLocation, newDestination, newInLoco)
-                    newEvent = Event("CLIENT_SPAWN", newSpawnTime, newSpawnLocation, newUser)
-                    FES.insertEvent(newEvent)
-                    
-                    f.write(f"Event Insertion: f{newEvent}\n")
-                    
-                    # Compute user action
-                    currentUser = currentEvent.getUser()
-                    
-                    f.write(f"Current User: {currentUser}\n")
-                    
-                    if currentUser is None:
-                        raise ValueError("User is not definied for CLIENT_SPAWN type event")
-                    
-                    if currentUser.getInLocoFlag():
-                        nearestStandLocation = taxiStands.walkToStand(currentUser.getSPawnLocation())
-                        timeToStand = getTimeByFoot(currentUser.getSPawnLocation(), nearestStandLocation)
-                        arrivalTime = time + timeToStand
-                        currentUser.setNextLocation(nearestStandLocation)
-                        currentUser.setArrivalToStandTime(arrivalTime)
-                        arrivalToStand = Event("USER_ARRIVAL_TO_STAND", arrivalTime, nearestStandLocation, currentUser)
-                        FES.insertEvent(arrivalToStand)
-                        f.write(f"Event insertion: {arrivalToStand}\n")
-                    
-                    else:
-                        if taxiStands.existsIdleTaxi():
-                            standLocation = taxiStands.taxiCall(currentUser.getSPawnLocation())
-                            timeToUser = getTimeByTaxi(standLocation, currentUser.getSPawnLocation())
-                            arrivalTime = time + timeToUser
-                            taxiStands.taxiDeparture(standLocation)
-                            currentUser.setNextLocation(currentUser.getSPawnLocation())
-                            arrivalToUser = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, currentUser.getSPawnLocation(), currentUser)
-                            FES.insertEvent(arrivalToUser)
-                            f.write(f"Event Insertion: {arrivalToUser}\n")
-                            
-                        else:
-                            taxiStands.insertUserOnLine(currentUser)
-                            currentUser.setCallTaxiTime(time)
-                            f.write(f"User inserted in online queue\n")
-                            
-                elif eventType == "USER_ARRIVAL_TO_STAND":
-                    currentUser = currentEvent.getUser()
-                    f.write(f"Current user: {currentUser}\n")
-                    if currentUser is None:
-                                raise ValueError("User is not definied for USER_ARRIVAL_TO_STAND type event")
-                            
-                    standLocation = currentEvent.getLocation()
-                    
-                    if taxiStands.isIdle(standLocation):
-                        timeToDestination = getTimeByTaxi(standLocation, currentUser.getDestination())
-                        arrivalTime = time + timeToDestination
-                        
-                        taxiStands.taxiDeparture(standLocation)
-                        nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
-                        FES.insertEvent(nextEvent)
-                        f.write(f"Event Insertion: {nextEvent}\n")
-                    else:
-                        taxiStands.insertUserInLoco(standLocation, currentUser)
-                        f.write("User inserted in inloco queue\n")
-                        
-                elif eventType == "TAXI_ARRIVAL_TO_USER":
-                    currentUser = currentEvent.getUser()
-                    f.write(f"current User: {currentUser}\n")
-                    if currentUser is None:
-                        raise ValueError("User is not definied for USER_ARRIVAL_TO_STAND type event")
-                    
-                    timeToDestination = getTimeByTaxi(currentEvent.getLocation(), currentUser.getDestination())
-                    arrivalTime = time + timeToDestination
-                    
-                    nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
-                    FES.insertEvent(nextEvent)
-                    f.write(f"Event Insertion: {nextEvent}\n")
-                    
-                elif eventType == "ARRIVAL_TO_DESTINATION":
-                    currentUser = currentEvent.getUser()
-                    f.write(f"Current User: {currentUser}\n")
-                    
-                    if currentUser is None:
-                                raise ValueError("User is not definied for ARRIVAL_TO_DESTINATION type event")
-                            
-                    if taxiStands.hasUserOnLine():
-                        nextUser = taxiStands.getOnLineUser()
-                        timeToUser = getTimeByTaxi(currentUser.getDestination(), nextUser.getSPawnLocation())
-                        arrivalTime = time + timeToUser
-                        
-                        nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, nextUser.getSPawnLocation(), nextUser)
-                        FES.insertEvent(nextEvent)
-                        f.write(f"Event Isenrtion: {nextEvent}\n")
-                        
-                    else:
-                        nearestTaxiStand = taxiStands.findFreeStand(currentEvent.getLocation())
-                        timeToStand = getTimeByTaxi(currentEvent.getLocation(), nearestTaxiStand)
-                        arrivalTime = time + timeToStand
-                        
-                        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nearestTaxiStand, None)
-                        FES.insertEvent(nextEvent)
-                        f.write(f"Event Insertion: {nextEvent}\n")
-                        
-                elif eventType == "TAXI_ARRIVAL_TO_STAND":
-                    
-                    standLocation = currentEvent.getLocation()
-                    
-                    if taxiStands.hasWaitingUser(currentEvent.getLocation()):
-                        
-                        nextUser, inLocoFlag = taxiStands.getUser(standLocation)
-                        
-                        if inLocoFlag:
-                            destination = nextUser.getDestination()
-                            timeToDestination = getTimeByTaxi(standLocation, destination)
-                            arrivalTime = time + timeToDestination
-                            
-                            nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, destination, nextUser)
-                            FES.insertEvent(nextEvent)
-                            f.write(f"Event Insertion: {nextEvent}\n")
-                            
-                        else:
-                            destination = nextUser.getSPawnLocation()
-                            timeToUser = getTimeByTaxi(standLocation, destination)
-                            arrivalTime = time + timeToUser
-                            
-                            nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, destination, nextUser) 
-                            FES.insertEvent(nextEvent)
-                            f.write(f"Event Insertion: {nextEvent}\n")  
-                            
-                    elif taxiStands.hasFreeSpace(standLocation):
-                        taxiStands.taxiArrival(standLocation)
-                        f.write("Taxi parked in stand\n")
-                        
-                    else:
-                        nextStandLocation = taxiStands.findFreeStand(standLocation)
-                        timeToStand = getTimeByTaxi(standLocation, nextStandLocation)
-                        arrivalTime = time + timeToStand
-                        
-                        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nextStandLocation, None)      
-                        FES.insertEvent(nextEvent) 
-                        f.write(f"Event Insertion: {nextEvent}\n") 
-                        
-                else:
-                    raise ValueError(f"Evento non gestito: {eventType}")
-                
-                f.write("\n\n")
-        
-                
+
+            currentEvent = FES.getEvent()
+            time = currentEvent.getTime()
+            eventType = currentEvent.getType()
+
+            if LOG:
+                logState(iteration, time, FES, taxiStands, currentEvent)
+
+            if time > MAX_TIME:
+                writeLog(f"Time {time} > MAX_TIME ({MAX_TIME}): end of the simulation")
+                break
+
+            handler = EVENT_HANDLERS.get(eventType)
+            if handler is None:
+                raise ValueError(f"Evento non gestito: {eventType}")
+
+            handler(time, currentEvent, FES, taxiStands)
+            iteration += 1
+
     finally:
-        f.close()
-        
-                
-        
-        
+        if logFile is not None:
+            logFile.close()
+            logFile = None
+
+
+if __name__ == "__main__":
+    runSimulation()
