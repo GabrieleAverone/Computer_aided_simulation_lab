@@ -1,61 +1,70 @@
 
-
 class User:
-    
+
     _counter = 0
-    
-    def __init__(self, spawnTime: int, spawnPos: tuple[int, int], destPos: tuple[int, int], inLoco: bool) -> None:
-        
-        self.spawTime = spawnTime
-        self.spawnPos = spawnPos
-        self.destPos = destPos
+
+
+    def __init__(self, spawnTime: int, spawnLocation: tuple[int, int], destination: tuple[int, int], inLoco: bool) -> None:
+
+        self.spawnTime = spawnTime
+        self.spawnLocation = spawnLocation
+        self.destination = destination
         self.inLocoFlag = inLoco
-        self.arrivalTimeToStand = None
+        self.nextLocation = None
+        self.arrivalToStandTime = None
         self.callTaxiTime = None
-        
+
         self.counter = User._counter
         User._counter += 1
-        
-        
+
+
     def getArrivalToStandTime(self) -> int:
-        
-        if self.arrivalTimeToStand is not None:
-            return self.arrivalTimeToStand
-        
+
+        if self.arrivalToStandTime is not None:
+            return self.arrivalToStandTime
+
         else:
-            raise ValueError("The field arrivalToStand is not definied")
-        
-        
+            raise ValueError("The field arrivalToStandTime is not defined")
+
+
     def getInLocoFlag(self) -> bool:
         return self.inLocoFlag
-    
-    
-    def getSPawnLocation(self) -> tuple[int, int]:
-        return self.spawnPos
-    
-            
-    def setNextLocation(self, coord: tuple[int, int]) -> None:
-        self.nextPos = coord
-    
-    
+
+
+    def getSpawnLocation(self) -> tuple[int, int]:
+        return self.spawnLocation
+
+
+    def setNextLocation(self, location: tuple[int, int]) -> None:
+        self.nextLocation = location
+
+
     def getDestination(self) -> tuple[int, int]:
-        return self.destPos
-    
+        return self.destination
+
+
     def setArrivalToStandTime(self, time: int) -> None:
-        self.arrivalTimeToStand = time
-        
+        self.arrivalToStandTime = time
+
+
     def setCallTaxiTime(self, time: int) -> None:
         self.callTaxiTime = time
-        
+
+
     def getTaxiCallTime(self) -> int:
         if self.callTaxiTime is not None:
             return self.callTaxiTime
         else:
-            raise ValueError
-    
+            raise ValueError("The field callTaxiTime is not defined")
+
+
+    def describe(self) -> str:
+        """Full description of the user, used in the log."""
+        return (f"User {self.counter} -- spawnTime: {self.spawnTime} -- spawnLocation: {self.spawnLocation} "
+                f"-- destination: {self.destination} -- inLoco: {self.inLocoFlag}")
+
     def __str__(self):
         return f"{self.counter}"
-    
+
     def __repr__(self):
         return f"{self.counter}"
-    
