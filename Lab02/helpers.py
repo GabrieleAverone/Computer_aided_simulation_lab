@@ -33,7 +33,7 @@ TAXI_SPEED_VARIATION = 0.30   # ±30%: traffico
 # Moltiplica tutte le velocità: con 1 i tempi sono "realistici", con valori
 # più alti i viaggi si accorciano e si vedono più eventi in meno passi.
 # Il rapporto taxi/piedi resta invariato. Rimetti 1 per le simulazioni vere.
-SPEEDUP = 5
+SPEEDUP = 1
  
 # conversione: passi necessari per attraversare una cella a velocità media
 FOOT_STEPS_PER_CELL = CELL_SIZE_KM / (FOOT_SPEED_KMH * SPEEDUP) * 60 / TIME_STEP_MIN
