@@ -4,6 +4,7 @@ from TaxiStand import TaxiStands
 from User import User
 from Events import Event
 from FutureEventSet import FutureEventSet
+from Metrics import Metrics
 from helpers import (
     coinToss,
     getNewLocation,
@@ -41,6 +42,7 @@ MAX_TIME = 1000
 
 
 logFile: TextIO | None = None
+metrics: Metrics
 
 
 # ================================ LOGGING ================================
@@ -104,6 +106,7 @@ def handleClientSpawn(time: int, currentEvent: Event, FES: FutureEventSet, taxiS
 
     # Compute user action
     currentUser = getEventUser(currentEvent)
+    metrics.incrementUserCounter()
 
     if currentUser.getInLocoFlag():
         nearestStandLocation = taxiStands.walkToStand(currentUser.getSpawnLocation())
@@ -121,6 +124,8 @@ def handleClientSpawn(time: int, currentEvent: Event, FES: FutureEventSet, taxiS
             arrivalTime = time + timeToUser
             taxiStands.taxiDeparture(standLocation)
             writeLog(f"Taxi departed from stand {standLocation}")
+            currentUser.setCallTaxiTime(time)
+            metrics.incrementTimeToUser(timeToUser)
             currentUser.setNextLocation(currentUser.getSpawnLocation())
             arrivalToUser = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, currentUser.getSpawnLocation(), currentUser)
             insertAndLogEvent(FES, arrivalToUser)
@@ -144,6 +149,9 @@ def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
         writeLog(f"Taxi departed from stand {standLocation}")
         nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
         insertAndLogEvent(FES, nextEvent)
+        metrics.recordInLocoWait(standLocation, 0)
+        metrics.incrementRideCounter()
+        metrics.incrementRideTimeAcc(timeToDestination)
 
     else:
         taxiStands.insertInLocoUser(standLocation, currentUser)
@@ -153,11 +161,14 @@ def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
 def handleTaxiArrivalToUser(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
 
     currentUser = getEventUser(currentEvent)
+    metrics.recordOnLineWait(time - currentUser.getTaxiCallTime())
 
     timeToDestination = getTimeByTaxi(currentEvent.getLocation(), currentUser.getDestination())
     arrivalTime = time + timeToDestination
 
     nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
+    metrics.incrementRideCounter()
+    metrics.incrementRideTimeAcc(timeToDestination)
     insertAndLogEvent(FES, nextEvent)
 
 
@@ -173,6 +184,7 @@ def handleArrivalToDestination(time: int, currentEvent: Event, FES: FutureEventS
 
         nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, nextUser.getSpawnLocation(), nextUser)
         insertAndLogEvent(FES, nextEvent)
+        metrics.incrementTimeToUser(timeToUser)
 
     else:
         nearestTaxiStand = taxiStands.findFreeStand(currentEvent.getLocation())
@@ -182,6 +194,7 @@ def handleArrivalToDestination(time: int, currentEvent: Event, FES: FutureEventS
 
         nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nearestTaxiStand, None)
         insertAndLogEvent(FES, nextEvent)
+        metrics.incrementTimeBackToStand(timeToStand)
 
 
 def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
@@ -195,11 +208,14 @@ def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
         if inLocoFlag:
             writeLog(f"Taxi at stand {standLocation} picks up in-loco user {nextUser}")
             destination = nextUser.getDestination()
+            metrics.recordInLocoWait(standLocation, time - nextUser.getArrivalToStandTime())
             timeToDestination = getTimeByTaxi(standLocation, destination)
             arrivalTime = time + timeToDestination
 
             nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, destination, nextUser)
             insertAndLogEvent(FES, nextEvent)
+            metrics.incrementRideCounter()
+            metrics.incrementRideTimeAcc(timeToDestination)
 
         else:
             writeLog(f"Taxi at stand {standLocation} goes to online user {nextUser}")
@@ -209,6 +225,7 @@ def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
 
             nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, destination, nextUser)
             insertAndLogEvent(FES, nextEvent)
+            metrics.incrementTimeToUser(timeToUser)
 
     elif taxiStands.hasFreeSpot(standLocation):
         taxiStands.taxiArrival(standLocation)
@@ -222,6 +239,7 @@ def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
 
         nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nextStandLocation, None)
         insertAndLogEvent(FES, nextEvent)
+        metrics.incrementTimeBackToStand(timeToStand)
 
 
 EVENT_HANDLERS = {
@@ -237,6 +255,7 @@ EVENT_HANDLERS = {
 
 def runSimulation() -> None:
     global logFile
+    global metrics
 
     # Simulation Initialization:
     standsCoord: list[tuple[int, int]] = []
@@ -245,6 +264,8 @@ def runSimulation() -> None:
 
     taxiStands = TaxiStands(CAPACITY, standsCoord)
     taxiStands.distributeTaxi(N_TAXI, policy=POLICY)
+
+    metrics = Metrics(standsCoord)
 
     FES = FutureEventSet()
     time = 0
@@ -265,8 +286,11 @@ def runSimulation() -> None:
                 logState(iteration, time, FES, taxiStands, currentEvent)
 
             if time > MAX_TIME:
+                metrics.update(MAX_TIME, taxiStands)   # chiude l'ultimo intervallo esattamente a MAX_TIME
                 writeLog(f"Time {time} > MAX_TIME ({MAX_TIME}): end of the simulation")
                 break
+
+            metrics.update(time, taxiStands)
 
             handler = EVENT_HANDLERS.get(eventType)
             if handler is None:
@@ -279,6 +303,14 @@ def runSimulation() -> None:
         if logFile is not None:
             logFile.close()
             logFile = None
+
+    print("=== Metriche globali ===")
+    for key, value in metrics.globalReport(MAX_TIME, N_TAXI).items():
+        print(f"{key}: {value}")
+
+    print("\n=== Metriche per stand ===")
+    for pos, values in metrics.standReport(MAX_TIME).items():
+        print(pos, values)
 
 
 if __name__ == "__main__":

@@ -6,9 +6,8 @@ from User import User
 """
 
     TO-DO:
-        - Controllare contatori vari
-        - Implementare la ricerca dello stand più vicino in maniera più efficiente ->
-                usare scipy
+        - implementare redistribuzione dei taxi
+        - implementare calcolo posizione taxi su dove si trova il taxi quando un cliente chiama
 
 """
 
@@ -109,6 +108,7 @@ class TaxiStands():
 
         self.totalIdleTaxi = 0
         self.onlineQueue: list[User] = []
+        self.totalInLoco = 0
 
 
     def distributeTaxi(self, nTaxi: int, policy: str) -> None:
@@ -217,6 +217,7 @@ class TaxiStands():
 
     def insertInLocoUser(self, standLocation: tuple[int, int], user: User) -> None:
 
+        self.totalInLoco += 1
         self.stands[standLocation].insertUser(user)
 
 
@@ -228,13 +229,15 @@ class TaxiStands():
     def getUser(self, standLocation: tuple[int, int]) -> tuple[User, bool]:
 
         if len(self.onlineQueue) == 0:
+            self.totalInLoco -= 1
             return self.stands[standLocation].getUser(), True
 
         if not self.stands[standLocation].hasWaitingUser():
             return self.onlineQueue.pop(0), False
 
         inLocoTime = self.stands[standLocation].getNextUserTime()
-        if inLocoTime < self.onlineQueue[0].getTaxiCallTime():
+        if inLocoTime <= self.onlineQueue[0].getTaxiCallTime():
+            self.totalInLoco -= 1
             return self.stands[standLocation].getUser(), True
         else:
             return self.onlineQueue.pop(0), False
@@ -254,6 +257,14 @@ class TaxiStands():
     def hasWaitingUser(self, standLocation: tuple[int, int]) -> bool:
 
         return len(self.onlineQueue) > 0 or self.stands[standLocation].hasWaitingUser()
+    
+    
+    def getTotalOnline(self) -> int:
+        return len(self.onlineQueue)
+    
+    
+    def getTotalInLoco(self) -> int:
+        return self.totalInLoco
 
 
     def __str__(self):
