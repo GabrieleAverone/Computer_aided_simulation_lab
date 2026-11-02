@@ -1,3 +1,6 @@
+import matplotlib.pyplot as plt
+
+
 class Metrics:
 
     def __init__(self, standPositions, warmup: int = 0, endTime: int = 0):
@@ -20,6 +23,8 @@ class Metrics:
         self.rideTimeAcc = 0          # taxi con cliente a bordo
         self.timeBackToStandAcc = 0   # taxi vuoto verso uno stand
         self.timeToUserAcc = 0        # taxi vuoto verso un cliente
+        self.timeRebalanceAcc = 0     # taxi vuoto spostato da uno stand all'altro (ribilanciamento)
+        self.nRebalance = 0           # numero di taxi ribilanciati
 
         # --- integrali nel tempo (aggiornati da update) ---
         self.lastTime = 0
@@ -32,6 +37,12 @@ class Metrics:
         # --- clienti in loco per stand ---
         self.nUserInLocoPerStand = {pos: 0 for pos in self.standPositions}
         self.waitedInLocoAccPerStand = {pos: 0 for pos in self.standPositions}
+
+        # --- serie per il warm-up: medie cumulative nel tempo (aggiornate da update) ---
+        self.warmupTimes = []
+        self.warmupIdleTaxi = []      # taxi fermi medi da 0 a t
+        self.warmupQueueInLoco = []   # clienti in coda negli stand, media da 0 a t
+        self.warmupQueueOnLine = []   # clienti in coda online, media da 0 a t
 
 
     # ------------------------------------------------------------------
@@ -55,6 +66,12 @@ class Metrics:
 
         self.onLineQueueAcc += len(taxiStands.onlineQueue) * dt
         self.lastTime = time
+
+        if time > 0:
+            self.warmupTimes.append(time)
+            self.warmupIdleTaxi.append(sum(self.idleTaxiAccPerStand.values()) / time)
+            self.warmupQueueInLoco.append(sum(self.queueAccPerStand.values()) / time)
+            self.warmupQueueOnLine.append(self.onLineQueueAcc / time)
 
 
     def _inWindow(self, time: int) -> bool:
@@ -117,6 +134,12 @@ class Metrics:
         self.timeToUserAcc += self._overlap(start, duration)
 
 
+    def recordRebalance(self, time: int) -> None:
+        # quando un taxi parte da uno stand donatore verso uno stand con la coda
+        self.nRebalance += 1
+        self.timeRebalanceAcc += time
+
+
     # ------------------------------------------------------------------
     # Risultati finali
     # ------------------------------------------------------------------
@@ -129,6 +152,7 @@ class Metrics:
             "nUsers": self.nUsers,
             "nRide": self.nRide,
             "nRedistributions": self.nRedistributions,
+            "nRebalance": self.nRebalance,
             "avgWaitInLoco": self.waitedInLocoAcc / self.nUserInLoco if self.nUserInLoco > 0 else 0.0,
             "avgWaitOnLine": self.waitedOnLineAcc / self.nUserOnLine if self.nUserOnLine > 0 else 0.0,
             "avgQueueInLoco": sum(self.queueAccPerStand.values()) / endTime,
@@ -137,6 +161,7 @@ class Metrics:
             "fracRide": self.rideTimeAcc / totalTaxiTime,
             "fracToUser": self.timeToUserAcc / totalTaxiTime,
             "fracBackToStand": self.timeBackToStandAcc / totalTaxiTime,
+            "fracRebalance": self.timeRebalanceAcc / totalTaxiTime,
             "fracIdle": idleAcc / totalTaxiTime,
             # clienti ancora in attesa a fine simulazione (le loro attese NON sono
             # nelle medie: il loro numero dice quanto è forte il bias di troncamento)
@@ -147,6 +172,26 @@ class Metrics:
 
     def standReport(self) -> dict:
         endTime = self.endTime - self.warmup
+    def plotWarmup(self) -> None:
+        # Media cumulativa (da 0 a t) di alcune grandezze di stato: il warm-up
+        # finisce più o meno quando le curve smettono di salire/scendere e si appiattiscono.
+        fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 7))
+        series = [
+            (self.warmupIdleTaxi, "taxi fermi (media cumulativa)"),
+            (self.warmupQueueInLoco, "coda in loco (media cumulativa)"),
+            (self.warmupQueueOnLine, "coda online (media cumulativa)"),
+        ]
+        for ax, (values, label) in zip(axes, series):
+            ax.plot(self.warmupTimes, values)
+            ax.set_ylabel(label, fontsize=8)
+            ax.grid(True, alpha=0.3)
+        axes[-1].set_xlabel("tempo (passi)")
+        fig.suptitle("Andamento verso lo stato stazionario")
+        fig.tight_layout()
+        plt.show()
+
+
+    def standReport(self, endTime: int) -> dict:
         report = {}
         for pos in self.standPositions:
             n = self.nUserInLocoPerStand[pos]

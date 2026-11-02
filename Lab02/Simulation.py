@@ -24,9 +24,9 @@ LOG_FILE_NAME = "logFile.txt"
 LOG_SEPARATOR_LENGTH = 60
 
 # Parameteres for taxi and taxi stands:
-N_STAND = 3
+N_STAND = 2
 N_TAXI = 6
-CAPACITY = [2, 2, 2]
+CAPACITY = [3, 3]
 POLICY = "uniform"
 REDISTRIBUTION = True       # redistribuzione dei taxi verso gli stand con clienti in coda
 
@@ -43,6 +43,10 @@ MAX_TIME = 1000
 WARMUP_TIME = 100           # transitorio iniziale escluso dalle statistiche
 N_REPLICATIONS = 10         # repliche indipendenti (seed = BASE_SEED + i)
 BASE_SEED = 0
+
+# Parameters for rebalancing:
+REBALANCE = True            # attiva/disattiva il ribilanciamento dei taxi
+REBALANCE_RESERVE = 1       # uno stand cede un taxi solo se ne ha più di questi fermi
 
 
 logFile: TextIO | None = None
@@ -194,6 +198,26 @@ def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
                 writeLog(f"Redistribution: taxi from stand {sourceLocation} sent to stand {standLocation}")
                 metrics.incrementRedistribution(time)
                 sendTaxiToStand(time, sourceLocation, standLocation, FES, taxiStands)
+        if REBALANCE:
+            rebalanceTaxi(time, standLocation, FES, taxiStands)
+
+
+def rebalanceTaxi(time: int, standLocation: tuple[int, int], FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+    """Un cliente è entrato in coda in uno stand senza taxi: chiama un taxi
+    dallo stand più vicino che ne ha più di REBALANCE_RESERVE fermi."""
+    donorLocation = taxiStands.findDonorStand(standLocation, REBALANCE_RESERVE)
+    if donorLocation is None:
+        writeLog("Rebalance: no stand can give a taxi")
+        return
+
+    taxiStands.taxiDeparture(donorLocation)
+    timeToStand = getTimeByTaxi(donorLocation, standLocation)
+    arrivalTime = time + timeToStand
+    writeLog(f"Rebalance: taxi sent from stand {donorLocation} to stand {standLocation}")
+
+    nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, standLocation, None)
+    insertAndLogEvent(FES, nextEvent)
+    metrics.recordRebalance(timeToStand)
 
 
 def handleTaxiArrivalToUser(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
@@ -380,6 +404,9 @@ def runReplications() -> None:
     for pos, values in standReports[0].items():
         print(pos, values)
 
+    metrics.plotWarmup()
+
 
 if __name__ == "__main__":
     runReplications()
+    runSimulation()
