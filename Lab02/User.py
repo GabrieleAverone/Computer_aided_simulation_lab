@@ -11,6 +11,7 @@ class User:
         self.destPos = destPos
         self.inLocoFlag = inLoco
         self.arrivalTimeToStand = None
+        self.callTaxiTime = None
         
         self.counter = User._counter
         User._counter += 1
@@ -42,6 +43,15 @@ class User:
     
     def setArrivalToStandTime(self, time: int) -> None:
         self.arrivalTimeToStand = time
+        
+    def setCallTaxiTime(self, time: int) -> None:
+        self.callTaxiTime = time
+        
+    def getTaxiCallTime(self) -> int:
+        if self.callTaxiTime is not None:
+            return self.callTaxiTime
+        else:
+            raise ValueError
     
     def __str__(self):
         return f"{self.counter}"

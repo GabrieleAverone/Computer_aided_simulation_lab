@@ -8,7 +8,7 @@ from User import User
     TO-DO:
         - Controllare contatori vari
         - Implementare la ricerca dello stand più vicino in maniera più efficiente ->
-                usare
+                usare scipy
         
 """
 
@@ -207,7 +207,7 @@ class TaxiStands():
             return self.onlineQueue.pop(0), False
         
         inLocoTime = self.stands[standLocation].getNextUserTime()
-        if inLocoTime < self.onlineQueue[0].getArrivalToStandTime():
+        if inLocoTime < self.onlineQueue[0].getTaxiCallTime():
             return self.stands[standLocation].getUser(), True
         else:
             return self.onlineQueue.pop(0), False
