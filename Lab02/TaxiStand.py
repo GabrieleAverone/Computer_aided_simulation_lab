@@ -177,6 +177,21 @@ class TaxiStands():
         return self.stands[(int(self.standsCoordsArray[i, 0]), int(self.standsCoordsArray[i, 1]))].location
 
 
+    def findDonorStand(self, location: tuple[int, int], reserve: int) -> tuple[int, int] | None:
+        # ribilanciamento: lo stand più vicino a 'location' con più di 'reserve' taxi fermi.
+        # Restituisce None se nessuno stand può cedere un taxi (caso normale, non un errore).
+        pos = np.array(location, dtype=int)
+
+        dist = np.abs(pos[0] - self.standsCoordsArray[:, 0]) + np.abs(pos[1] - self.standsCoordsArray[:, 1])
+        validStands = np.array([self.stands[(int(x), int(y))].nTaxi > reserve for x, y in self.standsCoordsArray])
+
+        if not validStands.any():
+            return None
+
+        i = np.flatnonzero(validStands)[np.argmin(dist[validStands])]
+        return self.stands[(int(self.standsCoordsArray[i, 0]), int(self.standsCoordsArray[i, 1]))].location
+
+
     # ---------------------------- taxi ----------------------------
 
     def taxiArrival(self, standLocation: tuple[int, int]) -> bool:

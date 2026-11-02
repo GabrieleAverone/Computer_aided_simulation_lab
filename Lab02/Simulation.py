@@ -28,9 +28,9 @@ LOG_FILE_NAME = "logFile.txt"
 LOG_SEPARATOR_LENGTH = 60
 
 # Parameteres for taxi and taxi stands:
-N_STAND = 3
+N_STAND = 2
 N_TAXI = 6
-CAPACITY = [2, 2, 2]
+CAPACITY = [3, 3]
 POLICY = "uniform"
 
 # Parameters for Users:
@@ -39,6 +39,10 @@ MIN_TRIP_DISTANCE = 10      # distanza minima (Manhattan) tra spawn e destinazio
 
 # Parameters for the simulation:
 MAX_TIME = 1000
+
+# Parameters for rebalancing:
+REBALANCE = True            # attiva/disattiva il ribilanciamento dei taxi
+REBALANCE_RESERVE = 1       # uno stand cede un taxi solo se ne ha più di questi fermi
 
 
 logFile: TextIO | None = None
@@ -156,6 +160,27 @@ def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
     else:
         taxiStands.insertInLocoUser(standLocation, currentUser)
         writeLog(f"User inserted in in-loco queue of stand {standLocation}")
+
+        if REBALANCE:
+            rebalanceTaxi(time, standLocation, FES, taxiStands)
+
+
+def rebalanceTaxi(time: int, standLocation: tuple[int, int], FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+    """Un cliente è entrato in coda in uno stand senza taxi: chiama un taxi
+    dallo stand più vicino che ne ha più di REBALANCE_RESERVE fermi."""
+    donorLocation = taxiStands.findDonorStand(standLocation, REBALANCE_RESERVE)
+    if donorLocation is None:
+        writeLog("Rebalance: no stand can give a taxi")
+        return
+
+    taxiStands.taxiDeparture(donorLocation)
+    timeToStand = getTimeByTaxi(donorLocation, standLocation)
+    arrivalTime = time + timeToStand
+    writeLog(f"Rebalance: taxi sent from stand {donorLocation} to stand {standLocation}")
+
+    nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, standLocation, None)
+    insertAndLogEvent(FES, nextEvent)
+    metrics.recordRebalance(timeToStand)
 
 
 def handleTaxiArrivalToUser(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
@@ -311,6 +336,8 @@ def runSimulation() -> None:
     print("\n=== Metriche per stand ===")
     for pos, values in metrics.standReport(MAX_TIME).items():
         print(pos, values)
+
+    metrics.plotWarmup()
 
 
 if __name__ == "__main__":
