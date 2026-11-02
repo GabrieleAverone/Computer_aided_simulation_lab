@@ -2,11 +2,11 @@
 import numpy as np
 from collections.abc import Sequence
 from User import User
+from helpers import manhattanDistance
 
 """
 
     TO-DO:
-        - implementare redistribuzione dei taxi
         - implementare calcolo posizione taxi su dove si trova il taxi quando un cliente chiama
 
 """
@@ -110,6 +110,9 @@ class TaxiStands():
         self.onlineQueue: list[User] = []
         self.totalInLoco = 0
 
+        # taxi vuoti in viaggio verso ciascuno stand (servono per la redistribuzione)
+        self.incomingTaxi: dict[tuple[int, int], int] = {loc: 0 for loc in standsLocations}
+
 
     def distributeTaxi(self, nTaxi: int, policy: str) -> None:
 
@@ -175,6 +178,48 @@ class TaxiStands():
 
         i = np.flatnonzero(validStands)[np.argmin(dist[validStands])]
         return self.stands[(int(self.standsCoordsArray[i, 0]), int(self.standsCoordsArray[i, 1]))].location
+
+
+    # ------------------------- redistribuzione -------------------------
+
+    def taxiHeadingToStand(self, standLocation: tuple[int, int]) -> None:
+        # un taxi vuoto è partito verso questo stand
+        self.incomingTaxi[standLocation] += 1
+
+
+    def taxiArrivedAtStand(self, standLocation: tuple[int, int]) -> None:
+        # un taxi vuoto è arrivato (o viene reindirizzato altrove)
+        self.incomingTaxi[standLocation] -= 1
+
+
+    def unmetDemand(self, standLocation: tuple[int, int]) -> int:
+        # clienti in coda non ancora "coperti" da un taxi già in arrivo
+        return len(self.stands[standLocation].userQueue) - self.incomingTaxi[standLocation]
+
+
+    def findDemandStand(self, location: tuple[int, int]) -> tuple[int, int] | None:
+        # lo stand più vicino con domanda non coperta, None se non ce ne sono
+        best = None
+        bestDist = 0
+        for loc in self.standsLocations:
+            if self.unmetDemand(loc) > 0:
+                d = manhattanDistance(location, loc)
+                if best is None or d < bestDist:
+                    best, bestDist = loc, d
+        return best
+
+
+    def findSurplusStand(self, location: tuple[int, int]) -> tuple[int, int] | None:
+        # lo stand più vicino con almeno un taxi libero e senza clienti in coda
+        best = None
+        bestDist = 0
+        for loc in self.standsLocations:
+            stand = self.stands[loc]
+            if stand.hasIdleTaxi() and not stand.hasWaitingUser():
+                d = manhattanDistance(location, loc)
+                if best is None or d < bestDist:
+                    best, bestDist = loc, d
+        return best
 
 
     # ---------------------------- taxi ----------------------------

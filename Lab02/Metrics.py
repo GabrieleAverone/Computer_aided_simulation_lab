@@ -12,6 +12,7 @@ class Metrics:
         self.nRide = 0           # corse completate (conteggiate all'arrivo a destinazione)
         self.nUserInLoco = 0     # clienti in loco partiti dallo stand
         self.nUserOnLine = 0     # clienti online raggiunti dal taxi
+        self.nRedistributions = 0  # taxi spostati da uno stand a un altro per coprire una coda
 
         # --- accumulatori di tempo ---
         self.waitedInLocoAcc = 0
@@ -79,6 +80,11 @@ class Metrics:
             self.nRide += 1
 
 
+    def incrementRedistribution(self, time: int) -> None:
+        if self._inWindow(time):
+            self.nRedistributions += 1
+
+
     def recordInLocoWait(self, standLocation: tuple[int, int], waitedTime: int, time: int) -> None:
         # quando un cliente in loco parte dallo stand
         if not self._inWindow(time):
@@ -122,6 +128,7 @@ class Metrics:
         return {
             "nUsers": self.nUsers,
             "nRide": self.nRide,
+            "nRedistributions": self.nRedistributions,
             "avgWaitInLoco": self.waitedInLocoAcc / self.nUserInLoco if self.nUserInLoco > 0 else 0.0,
             "avgWaitOnLine": self.waitedOnLineAcc / self.nUserOnLine if self.nUserOnLine > 0 else 0.0,
             "avgQueueInLoco": sum(self.queueAccPerStand.values()) / endTime,

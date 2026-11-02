@@ -28,6 +28,7 @@ N_STAND = 3
 N_TAXI = 6
 CAPACITY = [2, 2, 2]
 POLICY = "uniform"
+REDISTRIBUTION = True       # redistribuzione dei taxi verso gli stand con clienti in coda
 
 # Parameters for Users:
 REACH_PROB = 0.5
@@ -108,6 +109,16 @@ def placeStands() -> list[tuple[int, int]]:
     return positions
 
 
+def sendTaxiToStand(time: int, fromLocation: tuple[int, int], standLocation: tuple[int, int],
+                    FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+    """Manda un taxi vuoto (già fuori da qualsiasi stand) verso uno stand."""
+    timeToStand = getTimeByTaxi(fromLocation, standLocation)
+    nextEvent = Event("TAXI_ARRIVAL_TO_STAND", time + timeToStand, standLocation, None)
+    taxiStands.taxiHeadingToStand(standLocation)
+    insertAndLogEvent(FES, nextEvent)
+    metrics.incrementTimeBackToStand(time, timeToStand)
+
+
 def getEventUser(event: Event) -> User:
     user = event.getUser()
     if user is None:
@@ -175,6 +186,15 @@ def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
         taxiStands.insertInLocoUser(standLocation, currentUser)
         writeLog(f"User inserted in in-loco queue of stand {standLocation}")
 
+        # redistribuzione: se la coda non è coperta, richiama un taxi fermo da un altro stand
+        if REDISTRIBUTION and taxiStands.unmetDemand(standLocation) > 0:
+            sourceLocation = taxiStands.findSurplusStand(standLocation)
+            if sourceLocation is not None:
+                taxiStands.taxiDeparture(sourceLocation)
+                writeLog(f"Redistribution: taxi from stand {sourceLocation} sent to stand {standLocation}")
+                metrics.incrementRedistribution(time)
+                sendTaxiToStand(time, sourceLocation, standLocation, FES, taxiStands)
+
 
 def handleTaxiArrivalToUser(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
 
@@ -205,19 +225,20 @@ def handleArrivalToDestination(time: int, currentEvent: Event, FES: FutureEventS
         metrics.incrementTimeToUser(time, timeToUser)
 
     else:
-        nearestTaxiStand = taxiStands.findFreeStand(currentEvent.getLocation())
-        writeLog(f"No user in online queue: taxi goes to stand {nearestTaxiStand}")
-        timeToStand = getTimeByTaxi(currentEvent.getLocation(), nearestTaxiStand)
-        arrivalTime = time + timeToStand
-
-        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nearestTaxiStand, None)
-        insertAndLogEvent(FES, nextEvent)
-        metrics.incrementTimeBackToStand(time, timeToStand)
+        targetStand = taxiStands.findDemandStand(currentEvent.getLocation()) if REDISTRIBUTION else None
+        if targetStand is not None:
+            writeLog(f"No user in online queue: taxi goes to stand {targetStand} (users waiting)")
+            metrics.incrementRedistribution(time)
+        else:
+            targetStand = taxiStands.findFreeStand(currentEvent.getLocation())
+            writeLog(f"No user in online queue: taxi goes to stand {targetStand}")
+        sendTaxiToStand(time, currentEvent.getLocation(), targetStand, FES, taxiStands)
 
 
 def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
 
     standLocation = currentEvent.getLocation()
+    taxiStands.taxiArrivedAtStand(standLocation)
 
     if taxiStands.hasWaitingUser(standLocation):
 
@@ -251,12 +272,7 @@ def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
     else:
         nextStandLocation = taxiStands.findFreeStand(standLocation)
         writeLog(f"Stand {standLocation} is full: taxi redirected to stand {nextStandLocation}")
-        timeToStand = getTimeByTaxi(standLocation, nextStandLocation)
-        arrivalTime = time + timeToStand
-
-        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nextStandLocation, None)
-        insertAndLogEvent(FES, nextEvent)
-        metrics.incrementTimeBackToStand(time, timeToStand)
+        sendTaxiToStand(time, standLocation, nextStandLocation, FES, taxiStands)
 
 
 EVENT_HANDLERS = {
