@@ -172,6 +172,19 @@ class Metrics:
 
     def standReport(self) -> dict:
         endTime = self.endTime - self.warmup
+        report = {}
+        for pos in self.standPositions:
+            n = self.nUserInLocoPerStand[pos]
+            report[pos] = {
+                "avgIdleTaxi": self.idleTaxiAccPerStand[pos] / endTime,
+                "avgQueue": self.queueAccPerStand[pos] / endTime,
+                "maxQueue": self.maxQueuePerStand[pos],
+                "nUserInLoco": n,
+                "avgWaitInLoco": self.waitedInLocoAccPerStand[pos] / n if n > 0 else 0.0,
+            }
+        return report
+    
+    
     def plotWarmup(self) -> None:
         # Media cumulativa (da 0 a t) di alcune grandezze di stato: il warm-up
         # finisce più o meno quando le curve smettono di salire/scendere e si appiattiscono.
@@ -189,17 +202,3 @@ class Metrics:
         fig.suptitle("Andamento verso lo stato stazionario")
         fig.tight_layout()
         plt.show()
-
-
-    def standReport(self, endTime: int) -> dict:
-        report = {}
-        for pos in self.standPositions:
-            n = self.nUserInLocoPerStand[pos]
-            report[pos] = {
-                "avgIdleTaxi": self.idleTaxiAccPerStand[pos] / endTime,
-                "avgQueue": self.queueAccPerStand[pos] / endTime,
-                "maxQueue": self.maxQueuePerStand[pos],
-                "nUserInLoco": n,
-                "avgWaitInLoco": self.waitedInLocoAccPerStand[pos] / n if n > 0 else 0.0,
-            }
-        return report
