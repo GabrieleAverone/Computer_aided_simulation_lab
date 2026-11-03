@@ -56,7 +56,7 @@ class Parameters:
     maxPlacementAttempts: int = 10_000
 
     # durata
-    maxTime: int = 1000
+    maxTime: int = 50000
     warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche
 
     def capacityList(self) -> list[int]:
