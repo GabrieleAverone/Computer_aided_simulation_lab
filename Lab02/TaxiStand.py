@@ -209,17 +209,6 @@ class TaxiStands():
         return best
 
 
-    def findSurplusStand(self, location: tuple[int, int]) -> tuple[int, int] | None:
-        # lo stand più vicino con almeno un taxi libero e senza clienti in coda
-        best = None
-        bestDist = 0
-        for loc in self.standsLocations:
-            stand = self.stands[loc]
-            if stand.hasIdleTaxi() and not stand.hasWaitingUser():
-                d = manhattanDistance(location, loc)
-                if best is None or d < bestDist:
-                    best, bestDist = loc, d
-        return best
     def findDonorStand(self, location: tuple[int, int], reserve: int) -> tuple[int, int] | None:
         # ribilanciamento: lo stand più vicino a 'location' con più di 'reserve' taxi fermi.
         # Restituisce None se nessuno stand può cedere un taxi (caso normale, non un errore).
