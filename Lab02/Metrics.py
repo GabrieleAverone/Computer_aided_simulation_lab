@@ -39,6 +39,10 @@ class Metrics:
         self.waitedInLocoAccPerStand = {pos: 0 for pos in self.standPositions}
 
         # --- serie per il warm-up: medie cumulative nel tempo (aggiornate da update) ---
+        # sono calcolate da t=0, con accumulatori propri: non dipendono da WARMUP_TIME
+        self.allIdleTaxiAcc = 0
+        self.allQueueInLocoAcc = 0
+        self.allQueueOnLineAcc = 0
         self.warmupTimes = []
         self.warmupIdleTaxi = []      # taxi fermi medi da 0 a t
         self.warmupQueueInLoco = []   # clienti in coda negli stand, media da 0 a t
@@ -54,24 +58,28 @@ class Metrics:
         start = max(self.lastTime, self.warmup)
         end = min(time, self.endTime)
         dt = max(0, end - start)
+        fullDt = time - self.lastTime      # intervallo intero, warm-up compreso
 
         for pos in self.standPositions:
             stand = taxiStands.stands[pos]
             qLen = len(stand.userQueue)
 
             self.idleTaxiAccPerStand[pos] += stand.nTaxi * dt
+            self.allIdleTaxiAcc += stand.nTaxi * fullDt
+            self.allQueueInLocoAcc += qLen * fullDt
             self.queueAccPerStand[pos] += qLen * dt
             if dt > 0 and qLen > self.maxQueuePerStand[pos]:
                 self.maxQueuePerStand[pos] = qLen
 
         self.onLineQueueAcc += len(taxiStands.onlineQueue) * dt
+        self.allQueueOnLineAcc += len(taxiStands.onlineQueue) * fullDt
         self.lastTime = time
 
         if time > 0:
             self.warmupTimes.append(time)
-            self.warmupIdleTaxi.append(sum(self.idleTaxiAccPerStand.values()) / time)
-            self.warmupQueueInLoco.append(sum(self.queueAccPerStand.values()) / time)
-            self.warmupQueueOnLine.append(self.onLineQueueAcc / time)
+            self.warmupIdleTaxi.append(self.allIdleTaxiAcc / time)
+            self.warmupQueueInLoco.append(self.allQueueInLocoAcc / time)
+            self.warmupQueueOnLine.append(self.allQueueOnLineAcc / time)
 
 
     def _inWindow(self, time: int) -> bool:
@@ -134,10 +142,11 @@ class Metrics:
         self.timeToUserAcc += self._overlap(start, duration)
 
 
-    def recordRebalance(self, time: int) -> None:
+    def recordRebalance(self, start: int, duration: int) -> None:
         # quando un taxi parte da uno stand donatore verso uno stand con la coda
-        self.nRebalance += 1
-        self.timeRebalanceAcc += time
+        if self._inWindow(start):
+            self.nRebalance += 1
+        self.timeRebalanceAcc += self._overlap(start, duration)
 
 
     # ------------------------------------------------------------------

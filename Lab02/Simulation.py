@@ -28,7 +28,7 @@ N_STAND = 2
 N_TAXI = 6
 CAPACITY = [3, 3]
 POLICY = "uniform"
-REDISTRIBUTION = True       # redistribuzione dei taxi verso gli stand con clienti in coda
+REDISTRIBUTION = True       # dopo una corsa il taxi va verso lo stand con clienti in coda
 
 # Parameters for Users:
 REACH_PROB = 0.5
@@ -114,13 +114,17 @@ def placeStands() -> list[tuple[int, int]]:
 
 
 def sendTaxiToStand(time: int, fromLocation: tuple[int, int], standLocation: tuple[int, int],
-                    FES: FutureEventSet, taxiStands: TaxiStands) -> None:
-    """Manda un taxi vuoto (già fuori da qualsiasi stand) verso uno stand."""
+                    FES: FutureEventSet, taxiStands: TaxiStands, rebalance: bool = False) -> None:
+    """Manda un taxi vuoto (già fuori da qualsiasi stand) verso uno stand.
+    rebalance=True se il viaggio è un ribilanciamento (metrica a parte)."""
     timeToStand = getTimeByTaxi(fromLocation, standLocation)
     nextEvent = Event("TAXI_ARRIVAL_TO_STAND", time + timeToStand, standLocation, None)
     taxiStands.taxiHeadingToStand(standLocation)
     insertAndLogEvent(FES, nextEvent)
-    metrics.incrementTimeBackToStand(time, timeToStand)
+    if rebalance:
+        metrics.recordRebalance(time, timeToStand)
+    else:
+        metrics.incrementTimeBackToStand(time, timeToStand)
 
 
 def getEventUser(event: Event) -> User:
@@ -190,15 +194,8 @@ def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
         taxiStands.insertInLocoUser(standLocation, currentUser)
         writeLog(f"User inserted in in-loco queue of stand {standLocation}")
 
-        # redistribuzione: se la coda non è coperta, richiama un taxi fermo da un altro stand
-        if REDISTRIBUTION and taxiStands.unmetDemand(standLocation) > 0:
-            sourceLocation = taxiStands.findSurplusStand(standLocation)
-            if sourceLocation is not None:
-                taxiStands.taxiDeparture(sourceLocation)
-                writeLog(f"Redistribution: taxi from stand {sourceLocation} sent to stand {standLocation}")
-                metrics.incrementRedistribution(time)
-                sendTaxiToStand(time, sourceLocation, standLocation, FES, taxiStands)
-        if REBALANCE:
+        # ribilanciamento: solo se la coda non è già coperta da un taxi in arrivo
+        if REBALANCE and taxiStands.unmetDemand(standLocation) > 0:
             rebalanceTaxi(time, standLocation, FES, taxiStands)
 
 
@@ -211,13 +208,8 @@ def rebalanceTaxi(time: int, standLocation: tuple[int, int], FES: FutureEventSet
         return
 
     taxiStands.taxiDeparture(donorLocation)
-    timeToStand = getTimeByTaxi(donorLocation, standLocation)
-    arrivalTime = time + timeToStand
     writeLog(f"Rebalance: taxi sent from stand {donorLocation} to stand {standLocation}")
-
-    nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, standLocation, None)
-    insertAndLogEvent(FES, nextEvent)
-    metrics.recordRebalance(timeToStand)
+    sendTaxiToStand(time, donorLocation, standLocation, FES, taxiStands, rebalance=True)
 
 
 def handleTaxiArrivalToUser(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
@@ -409,4 +401,3 @@ def runReplications() -> None:
 
 if __name__ == "__main__":
     runReplications()
-    runSimulation()
