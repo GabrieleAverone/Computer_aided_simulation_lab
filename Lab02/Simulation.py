@@ -12,13 +12,9 @@ from helpers import (
     getTimeByFoot,
     getTimeByTaxi,
     manhattanDistance,
+    setSeed,
 )
 
-"""
-    TO-DO:
-        - aggiungere le statistiche, probabilemte con una classe metrics fatta di contatori o robe del genere
-
-"""
 
 
 # ============================== PARAMETERS ==============================
@@ -32,13 +28,21 @@ N_STAND = 2
 N_TAXI = 6
 CAPACITY = [3, 3]
 POLICY = "uniform"
+REDISTRIBUTION = True       # redistribuzione dei taxi verso gli stand con clienti in coda
 
 # Parameters for Users:
 REACH_PROB = 0.5
 MIN_TRIP_DISTANCE = 10      # distanza minima (Manhattan) tra spawn e destinazione
 
+# Parameters for the stands placement:
+MIN_STAND_DISTANCE = 20     # distanza minima (Manhattan) tra due stand
+MAX_PLACEMENT_ATTEMPTS = 10_000
+
 # Parameters for the simulation:
 MAX_TIME = 1000
+WARMUP_TIME = 100           # transitorio iniziale escluso dalle statistiche
+N_REPLICATIONS = 10         # repliche indipendenti (seed = BASE_SEED + i)
+BASE_SEED = 0
 
 # Parameters for rebalancing:
 REBALANCE = True            # attiva/disattiva il ribilanciamento dei taxi
@@ -93,6 +97,32 @@ def createSpawnEvent(spawnTime: int) -> Event:
     return Event("CLIENT_SPAWN", spawnTime, spawnLocation, newUser)
 
 
+def placeStands() -> list[tuple[int, int]]:
+    """Estrae N_STAND posizioni distinte, a distanza di Manhattan >= MIN_STAND_DISTANCE."""
+    positions: list[tuple[int, int]] = []
+    attempts = 0
+    while len(positions) < N_STAND:
+        attempts += 1
+        if attempts > MAX_PLACEMENT_ATTEMPTS:
+            raise RuntimeError(
+                f"Impossibile piazzare {N_STAND} stand con distanza minima {MIN_STAND_DISTANCE}: "
+                "riduci MIN_STAND_DISTANCE o N_STAND")
+        candidate = getNewLocation()
+        if all(manhattanDistance(candidate, p) >= MIN_STAND_DISTANCE for p in positions):
+            positions.append(candidate)
+    return positions
+
+
+def sendTaxiToStand(time: int, fromLocation: tuple[int, int], standLocation: tuple[int, int],
+                    FES: FutureEventSet, taxiStands: TaxiStands) -> None:
+    """Manda un taxi vuoto (già fuori da qualsiasi stand) verso uno stand."""
+    timeToStand = getTimeByTaxi(fromLocation, standLocation)
+    nextEvent = Event("TAXI_ARRIVAL_TO_STAND", time + timeToStand, standLocation, None)
+    taxiStands.taxiHeadingToStand(standLocation)
+    insertAndLogEvent(FES, nextEvent)
+    metrics.incrementTimeBackToStand(time, timeToStand)
+
+
 def getEventUser(event: Event) -> User:
     user = event.getUser()
     if user is None:
@@ -110,7 +140,7 @@ def handleClientSpawn(time: int, currentEvent: Event, FES: FutureEventSet, taxiS
 
     # Compute user action
     currentUser = getEventUser(currentEvent)
-    metrics.incrementUserCounter()
+    metrics.incrementUserCounter(time)
 
     if currentUser.getInLocoFlag():
         nearestStandLocation = taxiStands.walkToStand(currentUser.getSpawnLocation())
@@ -129,7 +159,7 @@ def handleClientSpawn(time: int, currentEvent: Event, FES: FutureEventSet, taxiS
             taxiStands.taxiDeparture(standLocation)
             writeLog(f"Taxi departed from stand {standLocation}")
             currentUser.setCallTaxiTime(time)
-            metrics.incrementTimeToUser(timeToUser)
+            metrics.incrementTimeToUser(time, timeToUser)
             currentUser.setNextLocation(currentUser.getSpawnLocation())
             arrivalToUser = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, currentUser.getSpawnLocation(), currentUser)
             insertAndLogEvent(FES, arrivalToUser)
@@ -153,14 +183,21 @@ def handleUserArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
         writeLog(f"Taxi departed from stand {standLocation}")
         nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
         insertAndLogEvent(FES, nextEvent)
-        metrics.recordInLocoWait(standLocation, 0)
-        metrics.incrementRideCounter()
-        metrics.incrementRideTimeAcc(timeToDestination)
+        metrics.recordInLocoWait(standLocation, 0, time)
+        metrics.incrementRideTimeAcc(time, timeToDestination)
 
     else:
         taxiStands.insertInLocoUser(standLocation, currentUser)
         writeLog(f"User inserted in in-loco queue of stand {standLocation}")
 
+        # redistribuzione: se la coda non è coperta, richiama un taxi fermo da un altro stand
+        if REDISTRIBUTION and taxiStands.unmetDemand(standLocation) > 0:
+            sourceLocation = taxiStands.findSurplusStand(standLocation)
+            if sourceLocation is not None:
+                taxiStands.taxiDeparture(sourceLocation)
+                writeLog(f"Redistribution: taxi from stand {sourceLocation} sent to stand {standLocation}")
+                metrics.incrementRedistribution(time)
+                sendTaxiToStand(time, sourceLocation, standLocation, FES, taxiStands)
         if REBALANCE:
             rebalanceTaxi(time, standLocation, FES, taxiStands)
 
@@ -186,20 +223,20 @@ def rebalanceTaxi(time: int, standLocation: tuple[int, int], FES: FutureEventSet
 def handleTaxiArrivalToUser(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
 
     currentUser = getEventUser(currentEvent)
-    metrics.recordOnLineWait(time - currentUser.getTaxiCallTime())
+    metrics.recordOnLineWait(time - currentUser.getTaxiCallTime(), time)
 
     timeToDestination = getTimeByTaxi(currentEvent.getLocation(), currentUser.getDestination())
     arrivalTime = time + timeToDestination
 
     nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
-    metrics.incrementRideCounter()
-    metrics.incrementRideTimeAcc(timeToDestination)
+    metrics.incrementRideTimeAcc(time, timeToDestination)
     insertAndLogEvent(FES, nextEvent)
 
 
 def handleArrivalToDestination(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
 
     currentUser = getEventUser(currentEvent)
+    metrics.incrementRideCounter(time)      # la corsa è completata
 
     if taxiStands.hasOnlineUser():
         nextUser = taxiStands.getOnlineUser()
@@ -209,22 +246,23 @@ def handleArrivalToDestination(time: int, currentEvent: Event, FES: FutureEventS
 
         nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, nextUser.getSpawnLocation(), nextUser)
         insertAndLogEvent(FES, nextEvent)
-        metrics.incrementTimeToUser(timeToUser)
+        metrics.incrementTimeToUser(time, timeToUser)
 
     else:
-        nearestTaxiStand = taxiStands.findFreeStand(currentEvent.getLocation())
-        writeLog(f"No user in online queue: taxi goes to stand {nearestTaxiStand}")
-        timeToStand = getTimeByTaxi(currentEvent.getLocation(), nearestTaxiStand)
-        arrivalTime = time + timeToStand
-
-        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nearestTaxiStand, None)
-        insertAndLogEvent(FES, nextEvent)
-        metrics.incrementTimeBackToStand(timeToStand)
+        targetStand = taxiStands.findDemandStand(currentEvent.getLocation()) if REDISTRIBUTION else None
+        if targetStand is not None:
+            writeLog(f"No user in online queue: taxi goes to stand {targetStand} (users waiting)")
+            metrics.incrementRedistribution(time)
+        else:
+            targetStand = taxiStands.findFreeStand(currentEvent.getLocation())
+            writeLog(f"No user in online queue: taxi goes to stand {targetStand}")
+        sendTaxiToStand(time, currentEvent.getLocation(), targetStand, FES, taxiStands)
 
 
 def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet, taxiStands: TaxiStands) -> None:
 
     standLocation = currentEvent.getLocation()
+    taxiStands.taxiArrivedAtStand(standLocation)
 
     if taxiStands.hasWaitingUser(standLocation):
 
@@ -233,14 +271,13 @@ def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
         if inLocoFlag:
             writeLog(f"Taxi at stand {standLocation} picks up in-loco user {nextUser}")
             destination = nextUser.getDestination()
-            metrics.recordInLocoWait(standLocation, time - nextUser.getArrivalToStandTime())
+            metrics.recordInLocoWait(standLocation, time - nextUser.getArrivalToStandTime(), time)
             timeToDestination = getTimeByTaxi(standLocation, destination)
             arrivalTime = time + timeToDestination
 
             nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, destination, nextUser)
             insertAndLogEvent(FES, nextEvent)
-            metrics.incrementRideCounter()
-            metrics.incrementRideTimeAcc(timeToDestination)
+            metrics.incrementRideTimeAcc(time, timeToDestination)
 
         else:
             writeLog(f"Taxi at stand {standLocation} goes to online user {nextUser}")
@@ -250,7 +287,7 @@ def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
 
             nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, destination, nextUser)
             insertAndLogEvent(FES, nextEvent)
-            metrics.incrementTimeToUser(timeToUser)
+            metrics.incrementTimeToUser(time, timeToUser)
 
     elif taxiStands.hasFreeSpot(standLocation):
         taxiStands.taxiArrival(standLocation)
@@ -259,12 +296,7 @@ def handleTaxiArrivalToStand(time: int, currentEvent: Event, FES: FutureEventSet
     else:
         nextStandLocation = taxiStands.findFreeStand(standLocation)
         writeLog(f"Stand {standLocation} is full: taxi redirected to stand {nextStandLocation}")
-        timeToStand = getTimeByTaxi(standLocation, nextStandLocation)
-        arrivalTime = time + timeToStand
-
-        nextEvent = Event("TAXI_ARRIVAL_TO_STAND", arrivalTime, nextStandLocation, None)
-        insertAndLogEvent(FES, nextEvent)
-        metrics.incrementTimeBackToStand(timeToStand)
+        sendTaxiToStand(time, standLocation, nextStandLocation, FES, taxiStands)
 
 
 EVENT_HANDLERS = {
@@ -278,25 +310,27 @@ EVENT_HANDLERS = {
 
 # =============================== SIMULATION ===============================
 
-def runSimulation() -> None:
+def runSimulation(seed: int | None = None, log: bool = LOG) -> tuple[dict, dict]:
+    """Esegue una replica e restituisce (report globale, report per stand)."""
     global logFile
     global metrics
 
+    if seed is not None:
+        setSeed(seed)
+
     # Simulation Initialization:
-    standsCoord: list[tuple[int, int]] = []
-    for i in range(N_STAND):
-        standsCoord.append(getNewLocation())
+    standsCoord = placeStands()
 
     taxiStands = TaxiStands(CAPACITY, standsCoord)
     taxiStands.distributeTaxi(N_TAXI, policy=POLICY)
 
-    metrics = Metrics(standsCoord)
+    metrics = Metrics(standsCoord, WARMUP_TIME, MAX_TIME)
 
     FES = FutureEventSet()
     time = 0
     FES.insertEvent(createSpawnEvent(time))
 
-    if LOG:
+    if log and LOG:
         logFile = open(LOG_FILE_NAME, "w")
 
     try:
@@ -307,7 +341,7 @@ def runSimulation() -> None:
             time = currentEvent.getTime()
             eventType = currentEvent.getType()
 
-            if LOG:
+            if logFile is not None:
                 logState(iteration, time, FES, taxiStands, currentEvent)
 
             if time > MAX_TIME:
@@ -329,16 +363,50 @@ def runSimulation() -> None:
             logFile.close()
             logFile = None
 
-    print("=== Metriche globali ===")
-    for key, value in metrics.globalReport(MAX_TIME, N_TAXI).items():
-        print(f"{key}: {value}")
+    return metrics.globalReport(N_TAXI, taxiStands), metrics.standReport()
 
-    print("\n=== Metriche per stand ===")
-    for pos, values in metrics.standReport(MAX_TIME).items():
+
+# t di Student, 95% bilaterale, per df = 1..30 (oltre: ~normale)
+_T95 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+        2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+        2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042]
+
+
+def meanAndCI(values: list[float]) -> tuple[float, float]:
+    """Media e semi-ampiezza dell'intervallo di confidenza al 95%."""
+    n = len(values)
+    mean = sum(values) / n
+    if n < 2:
+        return mean, float("nan")
+    var = sum((v - mean) ** 2 for v in values) / (n - 1)
+    t = _T95[n - 2] if n - 1 <= len(_T95) else 1.96
+    return mean, t * (var / n) ** 0.5
+
+
+def runReplications() -> None:
+    globalReports = []
+    standReports = []
+    for i in range(N_REPLICATIONS):
+        # il log viene scritto solo per la prima replica
+        g, s = runSimulation(seed=BASE_SEED + i, log=(i == 0))
+        globalReports.append(g)
+        standReports.append(s)
+
+    print(f"=== Metriche globali ({N_REPLICATIONS} repliche, warm-up {WARMUP_TIME}, "
+          f"fine {MAX_TIME}; media ± IC95%) ===")
+    for key in globalReports[0]:
+        mean, ci = meanAndCI([g[key] for g in globalReports])
+        print(f"{key}: {mean:.4f} ± {ci:.4f}")
+
+    # le posizioni degli stand cambiano a ogni replica: il dettaglio per stand
+    # si mostra solo per la prima
+    print(f"\n=== Metriche per stand (replica 0, seed {BASE_SEED}) ===")
+    for pos, values in standReports[0].items():
         print(pos, values)
 
     metrics.plotWarmup()
 
 
 if __name__ == "__main__":
+    runReplications()
     runSimulation()
