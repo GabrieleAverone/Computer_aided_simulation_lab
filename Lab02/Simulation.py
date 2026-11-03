@@ -1,4 +1,5 @@
 import csv
+import math
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -40,7 +41,8 @@ class Parameters:
     # taxi e stand
     nStand: int = 2
     nTaxi: int = 6
-    capacity: int | list[int] = 3       # posti per stand: un intero (uguale per tutti) o una lista
+    capacity: int | list[int] | None = None     # posti per stand: un intero, una lista, o None = automatico
+    capacitySlack: int = 0              # con capacity=None: posti extra per stand oltre ceil(nTaxi / nStand)
     policy: str = "uniform"
     redistribution: bool = True         # dopo una corsa il taxi va verso lo stand con clienti in coda
     rebalance: bool = True              # un cliente in coda richiama un taxi fermo da un altro stand
@@ -60,6 +62,9 @@ class Parameters:
     warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche
 
     def capacityList(self) -> list[int]:
+        if self.capacity is None:
+            # automatico: i posti minimi per far stare tutti i taxi, più il margine capacitySlack
+            return [math.ceil(self.nTaxi / self.nStand) + self.capacitySlack] * self.nStand
         if isinstance(self.capacity, int):
             return [self.capacity] * self.nStand
         return list(self.capacity)
@@ -68,6 +73,8 @@ class Parameters:
         return self.arrivalRate * TIME_STEP_MIN
 
     def validate(self) -> None:
+        if self.capacity is not None and self.capacitySlack != 0:
+            raise ValueError("capacitySlack si usa solo con capacity=None (capacity automatica)")
         if len(self.capacityList()) != self.nStand:
             raise ValueError("capacity deve avere un valore per ogni stand (o essere un intero)")
         if self.nTaxi > sum(self.capacityList()):
@@ -540,6 +547,6 @@ if __name__ == "__main__":
 
     # grid search: una run per ogni combinazione (ogni run ha un seed nuovo;
     # passa seed=... a run() per usare gli stessi numeri casuali in tutte)
-    # (capacity=4: con 2 stand servono almeno 8 posti per 8 taxi)
+    # (capacity non è indicata: viene calcolata da nTaxi e nStand)
     for nTaxi, reachProb in itertools.product([4, 6, 8], [0.3, 0.7]):
-        sim.run(nReplications=10, nTaxi=nTaxi, capacity=4, reachProb=reachProb, verbose=False)
+        sim.run(nReplications=10, nTaxi=nTaxi, reachProb=reachProb, verbose=False)
