@@ -56,7 +56,7 @@ class Parameters:
     maxPlacementAttempts: int = 10_000
 
     # durata
-    maxTime: int = 1000
+    maxTime: int = 50000
     warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche
 
     def capacityList(self) -> list[int]:
@@ -163,8 +163,8 @@ class Simulation:
             standReports.append(s)
             warmupSeries.append(self.metrics.warmupSeries())
 
-        self.saveResults(runId, seedSeq.entropy, globalReports)
-        self.saveWarmupPlot(runId, seedSeq.entropy, warmupSeries, overrides)
+        self.saveResults(runId, seedSeq.entropy, globalReports) # type: ignore
+        self.saveWarmupPlot(runId, seedSeq.entropy, warmupSeries, overrides) # type: ignore
 
         mean, ci = {}, {}
         for key in globalReports[0]:
@@ -461,6 +461,9 @@ class Simulation:
                 nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, destination, nextUser)
                 self.insertAndLogEvent(nextEvent)
                 self.metrics.incrementTimeToUser(time, timeToUser)
+                
+                if self.p.rebalance and self.taxiStands.unmetDemand(standLocation) > 0:
+                    self.rebalanceTaxi(time, standLocation)
 
         elif self.taxiStands.hasFreeSpot(standLocation):
             self.taxiStands.taxiArrival(standLocation)
