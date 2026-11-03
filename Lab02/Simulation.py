@@ -401,4 +401,3 @@ def runReplications() -> None:
 
 if __name__ == "__main__":
     runReplications()
-    runSimulation()
