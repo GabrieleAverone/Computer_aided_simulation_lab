@@ -45,7 +45,8 @@ TAXI_STEPS_PER_CELL = CELL_SIZE_KM / (TAXI_SPEED_KMH * SPEEDUP) * 60 / TIME_STEP
 rng = np.random.default_rng(42)
  
  
-def setSeed(seed: int) -> None:
+def setSeed(seed) -> None:
+    # seed: un intero o un np.random.SeedSequence
     global rng
     rng = np.random.default_rng(seed)
  
@@ -54,12 +55,12 @@ def manhattanDistance(a: tuple[int, int], b: tuple[int, int]) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
  
  
-def getNewSpawnTime() -> int:
+def getNewSpawnTime(arrivalProb: float = ARRIVAL_PROB_PER_STEP) -> int:
     """Interarrivo fino al prossimo cliente, in passi: Geometrica(p) su {1, 2, ...}.
     È l'equivalente a tempo discreto dell'esponenziale (senza memoria),
     con media esatta 1/p = 1/(λ·passo). Restituisce un intervallo: il
     chiamante fa now + valore."""
-    return int(rng.geometric(ARRIVAL_PROB_PER_STEP))
+    return int(rng.geometric(arrivalProb))
  
  
 def getNewLocation() -> tuple[int, int]:

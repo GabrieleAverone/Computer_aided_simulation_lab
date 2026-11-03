@@ -1,6 +1,3 @@
-import matplotlib.pyplot as plt
-
-
 class Metrics:
 
     def __init__(self, standPositions, warmup: int = 0, endTime: int = 0):
@@ -192,22 +189,14 @@ class Metrics:
                 "avgWaitInLoco": self.waitedInLocoAccPerStand[pos] / n if n > 0 else 0.0,
             }
         return report
-    
-    
-    def plotWarmup(self) -> None:
-        # Media cumulativa (da 0 a t) di alcune grandezze di stato: il warm-up
-        # finisce più o meno quando le curve smettono di salire/scendere e si appiattiscono.
-        fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 7))
-        series = [
-            (self.warmupIdleTaxi, "taxi fermi (media cumulativa)"),
-            (self.warmupQueueInLoco, "coda in loco (media cumulativa)"),
-            (self.warmupQueueOnLine, "coda online (media cumulativa)"),
-        ]
-        for ax, (values, label) in zip(axes, series):
-            ax.plot(self.warmupTimes, values)
-            ax.set_ylabel(label, fontsize=8)
-            ax.grid(True, alpha=0.3)
-        axes[-1].set_xlabel("tempo (passi)")
-        fig.suptitle("Andamento verso lo stato stazionario")
-        fig.tight_layout()
-        plt.show()
+
+
+    def warmupSeries(self) -> dict:
+        # medie cumulative (da 0 a t) di alcune grandezze di stato: il warm-up
+        # finisce più o meno quando le curve smettono di salire/scendere e si appiattiscono
+        return {
+            "times": list(self.warmupTimes),
+            "idleTaxi": list(self.warmupIdleTaxi),
+            "queueInLoco": list(self.warmupQueueInLoco),
+            "queueOnLine": list(self.warmupQueueOnLine),
+        }
