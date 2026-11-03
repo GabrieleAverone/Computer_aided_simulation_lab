@@ -164,7 +164,7 @@ class Simulation:
             warmupSeries.append(self.metrics.warmupSeries())
 
         self.saveResults(runId, seedSeq.entropy, globalReports) # type: ignore
-        self.saveWarmupPlot(runId, seedSeq.entropy, warmupSeries) # type: ignore
+        self.saveWarmupPlot(runId, seedSeq.entropy, warmupSeries, overrides) # type: ignore
 
         mean, ci = {}, {}
         for key in globalReports[0]:
@@ -205,8 +205,9 @@ class Simulation:
                 writer.writerow({"runId": runId, "replica": i, "seed": seed, **params, **g})
 
 
-    def saveWarmupPlot(self, runId: str, seed: int, warmupSeries: list[dict]) -> None:
-        """Salva plots/<runId>_warmup.png: una curva per replica (sottili) e la media (spessa)."""
+    def saveWarmupPlot(self, runId: str, seed: int, warmupSeries: list[dict], overrides: dict) -> None:
+        """Salva plots/<runId>_warmup.png: una curva per replica (sottili) e la media (spessa).
+        Nel titolo ci sono i parametri passati a run() (quelli della grid search)."""
         grid = np.arange(1, self.p.maxTime + 1)
         labels = {"idleTaxi": "taxi fermi (media cumulativa)",
                   "queueInLoco": "coda in loco (media cumulativa)",
@@ -222,8 +223,9 @@ class Simulation:
             ax.set_ylabel(label, fontsize=8)
             ax.grid(True, alpha=0.3)
         axes[-1].set_xlabel("tempo (passi); linea rossa = fine del warm-up")
-        fig.suptitle(f"Andamento verso lo stato stazionario -- {runId} (seed {seed})", fontsize=10)
-        fig.tight_layout()
+        paramsText = ", ".join(f"{k}={v}" for k, v in overrides.items()) or "parametri di base"
+        fig.suptitle(f"Andamento verso lo stato stazionario -- {runId}\n{paramsText}\nseed {seed}", fontsize=9)
+        fig.tight_layout(rect=(0, 0, 1, 0.94))
 
         plotsDir = self.outDir / "plots"
         plotsDir.mkdir(parents=True, exist_ok=True)
