@@ -10,8 +10,8 @@ import numpy as np
 # =====================================================================
  
 # --- mappa ---
-MAP_WIDTH = 100               # x in [0, MAP_WIDTH - 1]
-MAP_HEIGHT = 100              # y in [0, MAP_HEIGHT - 1]
+MAP_WIDTH = 200               # x in [0, MAP_WIDTH - 1]
+MAP_HEIGHT = 200              # y in [0, MAP_HEIGHT - 1]
 CELL_SIZE_KM = 0.1            # 100 m per cella
  
 # --- tempo discreto ---
