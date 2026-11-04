@@ -35,16 +35,6 @@ class Metrics:
         self.nUserInLocoPerStand = {pos: 0 for pos in self.standPositions}
         self.waitedInLocoAccPerStand = {pos: 0 for pos in self.standPositions}
 
-        # --- serie per il warm-up: medie cumulative nel tempo (aggiornate da update) ---
-        # sono calcolate da t=0, con accumulatori propri: non dipendono da WARMUP_TIME
-        self.allIdleTaxiAcc = 0
-        self.allQueueInLocoAcc = 0
-        self.allQueueOnLineAcc = 0
-        self.warmupTimes = []
-        self.warmupIdleTaxi = []      # taxi fermi medi da 0 a t
-        self.warmupQueueInLoco = []   # clienti in coda negli stand, media da 0 a t
-        self.warmupQueueOnLine = []   # clienti in coda online, media da 0 a t
-
         # --- stato a tratti costante (per il metodo di Welch) ---
         # il k-esimo valore vale nell'intervallo [segEnds[k-1], segEnds[k]) (segEnds[-1] = 0)
         self.segEnds = []
@@ -70,8 +60,6 @@ class Metrics:
             qLen = len(stand.userQueue)
 
             self.idleTaxiAccPerStand[pos] += stand.nTaxi * dt
-            self.allIdleTaxiAcc += stand.nTaxi * fullDt
-            self.allQueueInLocoAcc += qLen * fullDt
             self.queueAccPerStand[pos] += qLen * dt
             totIdle += stand.nTaxi
             totQueue += qLen
@@ -79,7 +67,6 @@ class Metrics:
                 self.maxQueuePerStand[pos] = qLen
 
         self.onLineQueueAcc += len(taxiStands.onlineQueue) * dt
-        self.allQueueOnLineAcc += len(taxiStands.onlineQueue) * fullDt
 
         if fullDt > 0:
             self.segEnds.append(time)
@@ -87,13 +74,6 @@ class Metrics:
             self.segQueueInLoco.append(totQueue)
             self.segQueueOnLine.append(len(taxiStands.onlineQueue))
         self.lastTime = time
-
-        if time > 0:
-            self.warmupTimes.append(time)
-            self.warmupIdleTaxi.append(self.allIdleTaxiAcc / time)
-            self.warmupQueueInLoco.append(self.allQueueInLocoAcc / time)
-            self.warmupQueueOnLine.append(self.allQueueOnLineAcc / time)
-
 
     def _inWindow(self, time: int) -> bool:
         return self.warmup <= time <= self.endTime
@@ -205,17 +185,6 @@ class Metrics:
                 "avgWaitInLoco": self.waitedInLocoAccPerStand[pos] / n if n > 0 else 0.0,
             }
         return report
-
-
-    def warmupSeries(self) -> dict:
-        # medie cumulative (da 0 a t) di alcune grandezze di stato: il warm-up
-        # finisce più o meno quando le curve smettono di salire/scendere e si appiattiscono
-        return {
-            "times": list(self.warmupTimes),
-            "idleTaxi": list(self.warmupIdleTaxi),
-            "queueInLoco": list(self.warmupQueueInLoco),
-            "queueOnLine": list(self.warmupQueueOnLine),
-        }
 
 
     def stateSeries(self) -> dict:

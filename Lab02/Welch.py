@@ -1,5 +1,5 @@
 """
-Metodo di Welch (e MSER-5) per stimare la durata del warm-up.
+Metodo di Welch e controllo di stabilità (trend nella seconda metà della run).
 
 Solo numpy: non dipende dalla simulazione. Gli input sono, per ogni replica, le
 serie a tratti costanti registrate da Metrics.stateSeries():
@@ -11,9 +11,7 @@ Passi:
         Y[j, i] = (1/delta) * integrale di Q_j(t) su [(i-1)*delta, i*delta)
   2. verticalMean                   : Ybar[i] = media di Y[j, i] sulle repliche
   3. welchMovingAverage             : media mobile centrata con finestra 2w+1
-  4. mser                           : stima automatica di l (MSER-5)
-  5. trendCheck                     : la seconda metà della run ha ancora un trend crescente?
-  6. deletionMeans                  : medie per replica dopo aver scartato i primi l passi
+  4. trendCheck                     : la seconda metà della run ha ancora un trend crescente?
 """
 
 import numpy as np
@@ -83,29 +81,7 @@ def intervalCenters(m: int, delta: int) -> np.ndarray:
 
 
 # ------------------------------------------------------------------
-# 4. MSER-5
-# ------------------------------------------------------------------
-def mser(ybar: np.ndarray, delta: int, batch: int = 5, maxFraction: float = 0.5) -> dict:
-    """MSER-5 sulla serie Ybar: raggruppa in batch da `batch` intervalli (media), poi sceglie
-    il numero d di batch da scartare che minimizza
-        sum_{j>d} (Z_j - Zbar_d)^2 / (k - d)^2
-    con d <= maxFraction * k. Restituisce l in passi di simulazione (multiplo di batch*delta).
-    `atLimit` = True se il minimo cade sul limite massimo: il warm-up non è ben determinato."""
-    k = len(ybar) // batch
-    if k < 4:
-        raise ValueError(f"troppo pochi intervalli per MSER-{batch} (m={len(ybar)})")
-    Z = ybar[:k * batch].reshape(k, batch).mean(axis=1)
-    dMax = int(maxFraction * k)
-    stats = []
-    for d in range(dMax + 1):
-        tail = Z[d:]
-        stats.append(((tail - tail.mean()) ** 2).sum() / (k - d) ** 2)
-    d = int(np.argmin(stats))                              # a parità: il d più piccolo
-    return {"l": d * batch * delta, "d": d, "atLimit": d == dMax, "nBatches": k}
-
-
-# ------------------------------------------------------------------
-# 5. Controllo di stabilità
+# 4. Controllo di stabilità
 # ------------------------------------------------------------------
 def _tCrit99(df: int) -> float:
     return _T99_ONE_SIDED[df - 1] if 1 <= df <= len(_T99_ONE_SIDED) else 2.326
@@ -161,47 +137,20 @@ def trendCheck(Y: np.ndarray, delta: int, w: int, maxTime: int,
 # Analisi di una configurazione
 # ------------------------------------------------------------------
 def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 10, 20),
-            trendW: int = 10, batch: int = 5) -> dict:
+            trendW: int = 10, **trendThresholds) -> dict:
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
         welch      : per metrica, {w: curva} per ogni w ammesso (w <= m/4)
-        mser       : per metrica, risultato di mser()
-        trend      : per metrica, risultato di trendCheck()
+        trend      : per metrica, risultato di trendCheck() (trendThresholds = soglie: relTol, absTol, strongRel, strongAbs)
         unstable   : True se almeno una metrica ha un trend crescente significativo
-        warmup     : max delle l di MSER-5 tra le metriche (None se unstable)
     """
     Y = buildMatrices(allSeries, maxTime, delta)
     m = Y[METRICS[0]].shape[1]
     ybar = {k: verticalMean(Y[k]) for k in METRICS}
     okWs = [w for w in ws if w <= m / 4]
     welch = {k: {w: welchMovingAverage(ybar[k], w) for w in okWs} for k in METRICS}
-    mserRes = {k: mser(ybar[k], delta, batch) for k in METRICS}
     wTrend = min(trendW, m // 4)
-    trend = {k: trendCheck(Y[k], delta, wTrend, maxTime) for k in METRICS}
+    trend = {k: trendCheck(Y[k], delta, wTrend, maxTime, **trendThresholds) for k in METRICS}
     unstable = any(t["unstable"] for t in trend.values())
     return {"delta": delta, "m": m, "ws": okWs, "trendW": wTrend, "Y": Y, "ybar": ybar,
-            "welch": welch, "mser": mserRes, "trend": trend, "unstable": unstable,
-            "warmup": None if unstable else max(r["l"] for r in mserRes.values())}
-
-
-# ------------------------------------------------------------------
-# 6. Stima con replication/deletion
-# ------------------------------------------------------------------
-def deletionMeans(allSeries: list[dict], l: float, maxTime: float) -> dict[str, list[float]]:
-    """Per ogni replica e metrica: media pesata nel tempo su [l, maxTime]
-    (i primi l passi sono scartati; l non deve essere multiplo di delta)."""
-    out = {k: [] for k in METRICS}
-    for s in allSeries:
-        for k in METRICS:
-            F = cumulativeIntegral(s, k, np.array([l, maxTime]))
-            out[k].append(float(F[1] - F[0]) / (maxTime - l))
-    return out
-
-
-def cumulativeMeanFrom(series: dict, key: str, l: float, grid: np.ndarray) -> np.ndarray:
-    """Media cumulativa da l a t per ogni t della griglia (t > l); NaN per t <= l."""
-    F = cumulativeIntegral(series, key, np.concatenate(([l], grid)))
-    out = np.full(len(grid), np.nan)
-    ok = grid > l
-    out[ok] = (F[1:][ok] - F[0]) / (grid[ok] - l)
-    return out
+            "welch": welch, "trend": trend, "unstable": unstable}
