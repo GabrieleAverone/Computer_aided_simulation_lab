@@ -1,5 +1,6 @@
 import csv
 import math
+import re
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -116,10 +117,10 @@ class Simulation:
 
     Ogni run() lancia nReplications repliche indipendenti e salva in outDir:
         - results.csv: UNA riga per replica, per tutte le run (viene sempre aggiunto in fondo)
-        - plots/<runId>_warmup.png: grafico del warm-up della run (linea rossa = warm-up stimato)
-        - plots/<runId>_raw.png: dati grezzi, una curva per replica (attese e taxi fermi per intervallo)
-        - plots/<runId>_welch_<metrica>.png: metodo di Welch, uno per metrica (con welch=True)
-        - plots/<runId>_warmup_from_l.png: medie cumulative ripartite da l (con cumulativeFromWarmup=True)
+        - plots/<parametri>/<runId>_warmup.png: grafico del warm-up della run (linea rossa = warm-up stimato)
+        - plots/<parametri>/<runId>_welch_<metrica>.png: metodo di Welch, uno per metrica (con welch=True)
+        - plots/<parametri>/<runId>_warmup_from_l.png: medie cumulative ripartite da l (con cumulativeFromWarmup=True)
+          (<parametri> = i parametri passati a run(), es. nTaxi=6_reachProb=0.3; "base" se non ce ne sono)
         - warmup_estimates.csv: warm-up (MSER-5), controllo di stabilità e stima finale, per run e metrica
         - logs/<runId>.txt: log della prima replica (solo con log=True)
 
@@ -150,14 +151,15 @@ class Simulation:
         self.taxiStands: TaxiStands
         self.FES: FutureEventSet
         self.logFile: TextIO | None = None
+        self.plotsDir: Path = self.outDir / "plots"     # cartella dei grafici della run in corso
 
 
     # ============================== API PUBBLICA ==============================
 
     def run(self, nReplications: int = 10, seed: int | None = None, verbose: bool = True,
-            welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (2, 5, 10, 20),
+            welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (1, 2, 5, 10, 20),
             warmup: int | None = None, cumulativeFromWarmup: bool = False,
-            rawPlot: bool = True, **overrides) -> dict:
+            plotFolders: bool = True, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
         (solo per questa run) e salva i risultati. Restituisce un dizionario con
         runId, seed, params, replicas (report globali), standReports, mean, ci, welch.
@@ -167,8 +169,8 @@ class Simulation:
           welchDelta, welchWs   : ampiezza degli intervalli (passi) e semi-ampiezze w delle medie mobili
           warmup                : warm-up l scelto a mano (passi); None = stima automatica (max di MSER-5)
           cumulativeFromWarmup  : salva anche le medie cumulative ripartite da l (verifica della "pancia")
-          rawPlot               : salva plots/<runId>_raw.png con i dati veri di ogni replica (una curva per replica):
-                                  attesa in loco, attesa online, taxi fermi, mediati su intervalli di welchDelta passi
+          plotFolders           : True = i grafici di ogni run vanno in plots/<parametri>/ (es. plots/nTaxi=6_reachProb=0.3/);
+                                  False = tutti insieme in plots/
         """
         self.p = replace(self.baseParams, **overrides)      # TypeError se un nome non esiste
         self.p.validate()
@@ -178,26 +180,23 @@ class Simulation:
         runId = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"    # data + suffisso casuale: unico
 
         self.outDir.mkdir(parents=True, exist_ok=True)
+        self.plotsDir = self.makePlotsDir(overrides, plotFolders)
         logPath = self.outDir / "logs" / f"{runId}.txt" if self.log else None
 
-        globalReports, standReports, warmupSeries, stateSeries, waitSeries = [], [], [], [], []
+        globalReports, standReports, warmupSeries, stateSeries = [], [], [], []
         for i, replicaSeed in enumerate(replicaSeeds):
             g, s = self.runReplica(replicaSeed, logPath if i == 0 else None)
             globalReports.append(g)
             standReports.append(s)
             warmupSeries.append(self.metrics.warmupSeries())
-            if welch or rawPlot:
+            if welch:
                 stateSeries.append(self.metrics.stateSeries())
-            if rawPlot:
-                waitSeries.append(self.metrics.waitSeries())
 
         welchResult = self.analyzeWarmup(stateSeries, welchDelta, welchWs, warmup) if welch else None
         mark = welchResult["warmup"] if welchResult else None
 
         self.saveResults(runId, seedSeq.entropy, globalReports) # type: ignore
         self.saveWarmupPlot(runId, seedSeq.entropy, warmupSeries, overrides, welchResult) # type: ignore
-        if rawPlot:
-            self.saveRawPlot(runId, seedSeq.entropy, stateSeries, waitSeries, welchDelta, mark, overrides) # type: ignore
         if welchResult:
             self.saveWelchPlots(runId, seedSeq.entropy, welchResult, overrides) # type: ignore
             self.saveWarmupEstimates(runId, seedSeq.entropy, welchResult, nReplications) # type: ignore
@@ -216,7 +215,7 @@ class Simulation:
             if welchResult:
                 self.printWelch(welchResult)
 
-        return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p),
+        return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p), "plotsDir": str(self.plotsDir),
                 "replicas": globalReports, "standReports": standReports, "mean": mean, "ci": ci,
                 "welch": None if welchResult is None else {k: v for k, v in welchResult.items() if k != "analysis"}}
 
@@ -324,10 +323,26 @@ class Simulation:
         fig.suptitle(f"Andamento verso lo stato stazionario -- {runId}\n{paramsText}\nseed {seed}", fontsize=9)
         fig.tight_layout(rect=(0, 0, 1, 0.94))
 
-        plotsDir = self.outDir / "plots"
+        plotsDir = self.plotsDir
         plotsDir.mkdir(parents=True, exist_ok=True)
         fig.savefig(plotsDir / f"{runId}_warmup.png", dpi=120)
         plt.close(fig)
+
+
+    def makePlotsDir(self, overrides: dict, perRun: bool) -> Path:
+        """Cartella dei grafici di una run: plots/ (perRun=False) oppure plots/<parametri>/, dove
+        <parametri> sono i parametri passati a run() (es. nTaxi=6_reachProb=0.3_rebalance=True).
+        Se esiste già (stessi parametri in un'altra run) si aggiunge _2, _3, ..."""
+        base = self.outDir / "plots"
+        if not perRun:
+            return base
+        name = "_".join(f"{k}={v}" for k, v in overrides.items()) or "base"
+        name = re.sub(r"[^\w=.,+-]+", "-", name)           # niente spazi, slash, parentesi
+        path, i = base / name, 2
+        while path.exists():
+            path = base / f"{name}_{i}"
+            i += 1
+        return path
 
 
     def _titleText(self, runId: str, seed: int, overrides: dict, what: str) -> str:
@@ -342,7 +357,7 @@ class Simulation:
         a = r["analysis"]
         labels = {"idleTaxi": "taxi fermi", "queueInLoco": "coda in loco", "queueOnLine": "coda online"}
         x = Welch.intervalCenters(a["m"], a["delta"])
-        plotsDir = self.outDir / "plots"
+        plotsDir = self.plotsDir
         plotsDir.mkdir(parents=True, exist_ok=True)
 
         for key, label in labels.items():
@@ -369,40 +384,6 @@ class Simulation:
             plt.close(fig)
 
 
-    def saveRawPlot(self, runId: str, seed: int, stateSeries: list[dict], waitSeries: list[dict],
-                    delta: int, mark: float | None, overrides: dict) -> None:
-        """Salva plots/<runId>_raw.png: i dati veri, una curva (colore) per replica, senza mediare tra
-        repliche né smussare. Attese: media delle attese dei clienti serviti in ogni intervallo di
-        `delta` passi (buco = nessun cliente servito). Taxi fermi: media nel tempo su ogni intervallo.
-        Linea rossa = warm-up stimato/manuale, se c'è."""
-        m = self.p.maxTime // delta
-        x = Welch.intervalCenters(m, delta)
-        panels = [("attesa in loco (passi)", "InLoco"), ("attesa online (passi)", "OnLine"), ("taxi fermi", None)]
-
-        fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 7))
-        for ax, (label, kind) in zip(axes, panels):
-            for j in range(len(stateSeries)):
-                if kind is None:
-                    y = Welch.binStateSeries(stateSeries[j], "idleTaxi", self.p.maxTime, delta)
-                else:
-                    w = waitSeries[j]
-                    y = Welch.binEventMeans(w["times" + kind], w["waits" + kind], self.p.maxTime, delta)
-                ax.plot(x, y, color=f"C{j % 10}", alpha=0.7, linewidth=0.8)
-            if mark is not None:
-                ax.axvline(mark, color="red", linestyle="--", linewidth=1)
-            ax.set_ylabel(label, fontsize=8)
-            ax.grid(True, alpha=0.3)
-        axes[-1].set_xlabel(f"tempo (passi); una curva per replica, medie su intervalli di {delta} passi"
-                            + ("; linea rossa = warm-up" if mark is not None else ""))
-        fig.suptitle(self._titleText(runId, seed, overrides, "Dati per replica"), fontsize=9)
-        fig.tight_layout(rect=(0, 0, 1, 0.94))
-
-        plotsDir = self.outDir / "plots"
-        plotsDir.mkdir(parents=True, exist_ok=True)
-        fig.savefig(plotsDir / f"{runId}_raw.png", dpi=120)
-        plt.close(fig)
-
-
     def saveWarmupFromPlot(self, runId: str, seed: int, stateSeries: list[dict], l: float, overrides: dict) -> None:
         """Salva plots/<runId>_warmup_from_l.png: come il grafico del warm-up, ma le medie
         cumulative ripartono da l (media su [l, t]). Se l è giusto non c'è più la "pancia" iniziale."""
@@ -424,7 +405,7 @@ class Simulation:
         fig.suptitle(self._titleText(runId, seed, overrides, f"Media cumulativa da l={l:g}"), fontsize=9)
         fig.tight_layout(rect=(0, 0, 1, 0.94))
 
-        plotsDir = self.outDir / "plots"
+        plotsDir = self.plotsDir
         plotsDir.mkdir(parents=True, exist_ok=True)
         fig.savefig(plotsDir / f"{runId}_warmup_from_l.png", dpi=120)
         plt.close(fig)

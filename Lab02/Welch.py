@@ -160,7 +160,7 @@ def trendCheck(Y: np.ndarray, delta: int, w: int, maxTime: int,
 # ------------------------------------------------------------------
 # Analisi di una configurazione
 # ------------------------------------------------------------------
-def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(2, 5, 10, 20),
+def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 10, 20),
             trendW: int = 10, batch: int = 5) -> dict:
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
@@ -204,17 +204,4 @@ def cumulativeMeanFrom(series: dict, key: str, l: float, grid: np.ndarray) -> np
     out = np.full(len(grid), np.nan)
     ok = grid > l
     out[ok] = (F[1:][ok] - F[0]) / (grid[ok] - l)
-    return out
-
-
-def binEventMeans(times, values, maxTime: int, delta: int) -> np.ndarray:
-    """Media dei valori (es. attese dei clienti) caduti in ciascun intervallo [(i-1)*delta, i*delta);
-    NaN dove nell'intervallo non c'è nessun valore. Ogni valore è assegnato all'istante `times`."""
-    m = maxTime // delta
-    idx = (np.asarray(times, dtype=float) // delta).astype(int)
-    ok = idx < m
-    n = np.bincount(idx[ok], minlength=m)
-    tot = np.bincount(idx[ok], weights=np.asarray(values, dtype=float)[ok], minlength=m)
-    out = np.full(m, np.nan)
-    out[n > 0] = tot[n > 0] / n[n > 0]
     return out
