@@ -51,10 +51,10 @@ class Parameters:
     # clienti
     reachProb: float = 0.5              # probabilità che un cliente sia "in loco"
     arrivalRate: float = ARRIVAL_RATE   # clienti al minuto
-    minTripDistance: int = 10           # distanza minima (Manhattan) tra spawn e destinazione
+    minTripDistance: int = 20           # distanza minima (Manhattan) tra spawn e destinazione
 
     # posizionamento degli stand
-    minStandDistance: int = 20          # distanza minima (Manhattan) tra due stand
+    minStandDistance: int = 40          # distanza minima (Manhattan) tra due stand
     maxPlacementAttempts: int = 10_000
 
     # durata
