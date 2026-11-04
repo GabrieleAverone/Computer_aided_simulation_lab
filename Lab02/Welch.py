@@ -11,17 +11,13 @@ Passi:
         Y[j, i] = (1/delta) * integrale di Q_j(t) su [(i-1)*delta, i*delta)
   2. verticalMean                   : Ybar[i] = media di Y[j, i] sulle repliche
   3. welchMovingAverage             : media mobile centrata con finestra 2w+1
-  4. trendCheck                     : la seconda metà della run ha ancora un trend crescente?
+  4. blockCheck                     : nella seconda metà della run la media cresce blocco dopo blocco?
 """
 
 import numpy as np
 
 METRICS = ("idleTaxi", "queueInLoco", "queueOnLine")
 
-# t di Student a una coda, 99% (df = 1..30; oltre: ~normale)
-_T99_ONE_SIDED = [31.821, 6.965, 4.541, 3.747, 3.365, 3.143, 2.998, 2.896, 2.821, 2.764,
-                  2.718, 2.681, 2.650, 2.624, 2.602, 2.583, 2.567, 2.552, 2.539, 2.528,
-                  2.518, 2.508, 2.500, 2.492, 2.485, 2.479, 2.473, 2.467, 2.462, 2.457]
 
 
 # ------------------------------------------------------------------
@@ -83,74 +79,41 @@ def intervalCenters(m: int, delta: int) -> np.ndarray:
 # ------------------------------------------------------------------
 # 4. Controllo di stabilità
 # ------------------------------------------------------------------
-def _tCrit99(df: int) -> float:
-    return _T99_ONE_SIDED[df - 1] if 1 <= df <= len(_T99_ONE_SIDED) else 2.326
-
-
-def _slopes(X: np.ndarray, x: np.ndarray) -> np.ndarray:
-    """Pendenza OLS di ogni riga di X (n x p) rispetto a x (p)."""
-    xc = x - x.mean()
-    return (X - X.mean(axis=1, keepdims=True)) @ xc / (xc @ xc)
-
-
-def trendCheck(Y: np.ndarray, delta: int, w: int, maxTime: int,
-               relTol: float = 0.10, absTol: float = 0.10,
-               strongRel: float = 0.40, strongAbs: float = 2.0) -> dict:
-    """C'è ancora un trend crescente nella seconda metà della run?
-    La pendenza è quella della regressione lineare sulla curva di Welch (finestra w), limitata ai
-    punti con ascissa > maxTime/2; "aumento" = pendenza * maxTime/2. `unstable` se:
-      (a) pendenza > 0 e aumento non trascurabile: > max(relTol * livello medio, absTol); e inoltre
-      (b) il trend è "chiaro", in uno di due modi:
-          - significativo: t-test a una coda (99%) sulle pendenze delle singole repliche (la curva
-            di Welch è autocorrelata, le repliche no): funziona quando le repliche sono concordi;
-          - netto: aumento >= strongRel * livello e >= strongAbs (in unità della metrica). Serve
-            perché ogni replica ha stand in posizioni diverse: spesso solo alcune esplodono e le
-            altre restano stazionarie, e il t sulla media (dominato da poche repliche) non le vede.
-    Le soglie sono euristiche: vanno lette insieme al grafico di Welch."""
-    n, m = Y.shape
-    x = intervalCenters(m, delta)
-    welch = welchMovingAverage(verticalMean(Y), w)
-    xw = x[:len(welch)]
-    sel = xw > maxTime / 2
-    slopeWelch = float(_slopes(welch[sel][None, :], xw[sel])[0])
-    level = float(np.mean(welch[sel]))
-    rise = slopeWelch * maxTime / 2
-    nonTrivial = bool(slopeWelch > 0 and rise > max(relTol * abs(level), absTol))
-
-    xs = x > maxTime / 2
-    perReplica = _slopes(Y[:, xs], x[xs])
-    mean = float(perReplica.mean())
-    if n >= 2:
-        sd = float(perReplica.std(ddof=1))
-        t = mean / (sd / np.sqrt(n)) if sd > 0 else (np.inf if mean > 0 else 0.0)
-        significant = bool(t > _tCrit99(n - 1))
-    else:                                                   # una sola replica: nessun test
-        t, significant = float("nan"), mean > 0
-    strong = bool(rise >= strongRel * abs(level) and rise >= strongAbs)
-
-    return {"slope": slopeWelch, "rise": float(rise), "level": level, "t": float(t),
-            "significant": significant, "strong": strong,
-            "unstable": bool(nonTrivial and (significant or strong))}
+def blockCheck(Y: np.ndarray, delta: int, maxTime: int, nBlocks: int = 4,
+               relTol: float = 0.10, absTol: float = 0.10) -> dict:
+    """Controllo di stabilità: nella seconda metà la media cresce blocco dopo blocco?
+    Si prende la seconda metà della run (ascissa > maxTime/2), la si divide in nBlocks blocchi
+    consecutivi e si calcola la media di Ybar (media sulle repliche) in ogni blocco.
+    `unstable` se le medie dei blocchi crescono sempre (ogni blocco > il precedente) e l'aumento
+    totale (ultimo - primo) supera max(relTol * livello medio, absTol)."""
+    x = intervalCenters(Y.shape[1], delta)
+    ybar = verticalMean(Y)[x > maxTime / 2]
+    size = len(ybar) // nBlocks
+    blocks = ybar[:size * nBlocks].reshape(nBlocks, size).mean(axis=1)
+    level = float(blocks.mean())
+    rise = float(blocks[-1] - blocks[0])
+    increasing = bool(np.all(np.diff(blocks) > 0))
+    return {"blocks": blocks, "level": level, "rise": rise, "increasing": increasing,
+            "unstable": bool(increasing and rise > max(relTol * abs(level), absTol))}
 
 
 # ------------------------------------------------------------------
 # Analisi di una configurazione
 # ------------------------------------------------------------------
 def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 10, 20),
-            trendW: int = 10, **trendThresholds) -> dict:
+            **trendThresholds) -> dict:
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
         welch      : per metrica, {w: curva} per ogni w ammesso (w <= m/4)
-        trend      : per metrica, risultato di trendCheck() (trendThresholds = soglie: relTol, absTol, strongRel, strongAbs)
-        unstable   : True se almeno una metrica ha un trend crescente significativo
+        trend      : per metrica, risultato di blockCheck() (trendThresholds = soglie: relTol, absTol)
+        unstable   : True se almeno una metrica cresce blocco dopo blocco
     """
     Y = buildMatrices(allSeries, maxTime, delta)
     m = Y[METRICS[0]].shape[1]
     ybar = {k: verticalMean(Y[k]) for k in METRICS}
     okWs = [w for w in ws if w <= m / 4]
     welch = {k: {w: welchMovingAverage(ybar[k], w) for w in okWs} for k in METRICS}
-    wTrend = min(trendW, m // 4)
-    trend = {k: trendCheck(Y[k], delta, wTrend, maxTime, **trendThresholds) for k in METRICS}
+    trend = {k: blockCheck(Y[k], delta, maxTime, **trendThresholds) for k in METRICS}
     unstable = any(t["unstable"] for t in trend.values())
-    return {"delta": delta, "m": m, "ws": okWs, "trendW": wTrend, "Y": Y, "ybar": ybar,
+    return {"delta": delta, "m": m, "ws": okWs, "Y": Y, "ybar": ybar,
             "welch": welch, "trend": trend, "unstable": unstable}

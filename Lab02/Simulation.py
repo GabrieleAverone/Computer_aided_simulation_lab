@@ -136,19 +136,17 @@ class Simulation:
     def run(self, nReplications: int = 10, seed: int | None = None, verbose: bool = True,
             welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (1, 2, 5, 10, 20),
             trendRelTol: float | None = None, trendAbsTol: float | None = None,
-            trendStrongRel: float | None = None, trendStrongAbs: float | None = None,
             plotFolders: bool = True, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
         (solo per questa run) e salva i risultati. Restituisce un dizionario con
         runId, seed, params, replicas (report globali), standReports, mean, ci, welch.
 
         Analisi di stabilità (non cambia i risultati in results.csv, tranne la colonna `stable`):
-          welch                 : grafici di Welch + controllo di trend nella 2a metà (colonna `stable` di results.csv)
+          welch                 : grafici di Welch + controllo di stabilità a blocchi (colonna `stable` di results.csv)
           welchDelta, welchWs   : ampiezza degli intervalli (passi) e semi-ampiezze w delle medie mobili
-          trendRelTol, trendAbsTol, trendStrongRel, trendStrongAbs : soglie del controllo di trend (None = default
-                                  di Welch.trendCheck: 0.10, 0.10, 0.40, 2.0). Instabile se l'aumento nella 2a metà supera
-                                  max(trendRelTol * livello, trendAbsTol) e inoltre è significativo (t-test sulle repliche)
-                                  oppure netto (>= trendStrongRel * livello e >= trendStrongAbs)
+          trendRelTol, trendAbsTol : soglie del controllo (None = default di Welch.blockCheck: 0.10, 0.10). La 2a metà
+                                  della run è divisa in 4 blocchi: instabile se le medie dei blocchi crescono sempre e
+                                  l'aumento (ultimo - primo) supera max(trendRelTol * livello medio, trendAbsTol)
           plotFolders           : True = i grafici di ogni run vanno in plots/<parametri>/ (es. plots/nTaxi=6_reachProb=0.3/);
                                   False = tutti insieme in plots/
         """
@@ -171,8 +169,7 @@ class Simulation:
             if welch:
                 stateSeries.append(self.metrics.stateSeries())
 
-        thresholds = {"relTol": trendRelTol, "absTol": trendAbsTol,
-                      "strongRel": trendStrongRel, "strongAbs": trendStrongAbs}
+        thresholds = {"relTol": trendRelTol, "absTol": trendAbsTol}
         thresholds = {k: v for k, v in thresholds.items() if v is not None}
         welchResult = (Analysis.analyzeStability(stateSeries, self.p.maxTime, welchDelta, welchWs, **thresholds)
                        if welch else None)
