@@ -23,7 +23,7 @@ def meanAndCI(values: list[float]) -> tuple[float, float]:
 
 def analyzeStability(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...],
                      **trendThresholds: float) -> dict:
-    """Curve di Welch + controllo di trend nella seconda metà della run.
+    """Curve di Welch + controllo a blocchi nella seconda metà della run.
     status: "stable" (nessun trend crescente) oppure "unstable"."""
     a = Welch.analyze(stateSeries, maxTime, delta, ws, **trendThresholds)
     return {"status": "unstable" if a["unstable"] else "stable", "unstable": a["unstable"],
@@ -35,7 +35,7 @@ def printWelch(r: dict) -> None:
     for k in Welch.METRICS:
         t = r["trend"][k]
         flag = "  <-- trend crescente" if t["unstable"] else ""
-        print(f"    {k}: 2a metà: livello {t['level']:.3f}, aumento {t['rise']:+.3f} "
-              f"(pendenza {t['slope']:.2e}/passo, t={t['t']:.2f}){flag}")
+        blocks = " -> ".join(f"{b:.3f}" for b in t["blocks"])
+        print(f"    {k}: 2a metà a blocchi: {blocks} (aumento {t['rise']:+.3f}){flag}")
     print("    ESITO: " + ("INSTABILE (trend crescente: nessuno stato stazionario)" if r["unstable"]
                           else "STABILE (nessun trend crescente nella 2a metà)"))
