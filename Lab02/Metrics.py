@@ -45,6 +45,13 @@ class Metrics:
         self.warmupQueueInLoco = []   # clienti in coda negli stand, media da 0 a t
         self.warmupQueueOnLine = []   # clienti in coda online, media da 0 a t
 
+        # --- stato a tratti costante (per il metodo di Welch) ---
+        # il k-esimo valore vale nell'intervallo [segEnds[k-1], segEnds[k]) (segEnds[-1] = 0)
+        self.segEnds = []
+        self.segIdleTaxi = []
+        self.segQueueInLoco = []
+        self.segQueueOnLine = []
+
 
     # ------------------------------------------------------------------
     # Da chiamare a ogni evento, PRIMA di processarlo
@@ -56,6 +63,7 @@ class Metrics:
         end = min(time, self.endTime)
         dt = max(0, end - start)
         fullDt = time - self.lastTime      # intervallo intero, warm-up compreso
+        totIdle = totQueue = 0
 
         for pos in self.standPositions:
             stand = taxiStands.stands[pos]
@@ -65,11 +73,19 @@ class Metrics:
             self.allIdleTaxiAcc += stand.nTaxi * fullDt
             self.allQueueInLocoAcc += qLen * fullDt
             self.queueAccPerStand[pos] += qLen * dt
+            totIdle += stand.nTaxi
+            totQueue += qLen
             if dt > 0 and qLen > self.maxQueuePerStand[pos]:
                 self.maxQueuePerStand[pos] = qLen
 
         self.onLineQueueAcc += len(taxiStands.onlineQueue) * dt
         self.allQueueOnLineAcc += len(taxiStands.onlineQueue) * fullDt
+
+        if fullDt > 0:
+            self.segEnds.append(time)
+            self.segIdleTaxi.append(totIdle)
+            self.segQueueInLoco.append(totQueue)
+            self.segQueueOnLine.append(len(taxiStands.onlineQueue))
         self.lastTime = time
 
         if time > 0:
@@ -199,4 +215,14 @@ class Metrics:
             "idleTaxi": list(self.warmupIdleTaxi),
             "queueInLoco": list(self.warmupQueueInLoco),
             "queueOnLine": list(self.warmupQueueOnLine),
+        }
+
+
+    def stateSeries(self) -> dict:
+        # stato a tratti costante da t=0 (per il metodo di Welch, vedi Welch.py)
+        return {
+            "ends": list(self.segEnds),
+            "idleTaxi": list(self.segIdleTaxi),
+            "queueInLoco": list(self.segQueueInLoco),
+            "queueOnLine": list(self.segQueueOnLine),
         }
