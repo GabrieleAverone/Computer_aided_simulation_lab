@@ -133,6 +133,24 @@ def trendCheck(Y: np.ndarray, delta: int, w: int, maxTime: int,
             "unstable": bool(nonTrivial and (significant or strong))}
 
 
+def blockCheck(Y: np.ndarray, delta: int, maxTime: int, nBlocks: int = 4,
+               relTol: float = 0.10, absTol: float = 0.10) -> dict:
+    """Versione semplice di trendCheck: la media cresce blocco dopo blocco?
+    Si prende la seconda metà della run (ascissa > maxTime/2), la si divide in nBlocks blocchi
+    consecutivi e si calcola la media di Ybar (media sulle repliche) in ogni blocco.
+    `unstable` se le medie dei blocchi crescono sempre (ogni blocco > il precedente) e l'aumento
+    totale (ultimo - primo) supera max(relTol * livello medio, absTol)."""
+    x = intervalCenters(Y.shape[1], delta)
+    ybar = verticalMean(Y)[x > maxTime / 2]
+    size = len(ybar) // nBlocks
+    blocks = ybar[:size * nBlocks].reshape(nBlocks, size).mean(axis=1)
+    level = float(blocks.mean())
+    rise = float(blocks[-1] - blocks[0])
+    increasing = bool(np.all(np.diff(blocks) > 0))
+    return {"blocks": blocks, "level": level, "rise": rise, "increasing": increasing,
+            "unstable": bool(increasing and rise > max(relTol * abs(level), absTol))}
+
+
 # ------------------------------------------------------------------
 # Analisi di una configurazione
 # ------------------------------------------------------------------
