@@ -52,6 +52,13 @@ class Metrics:
         self.segQueueInLoco = []
         self.segQueueOnLine = []
 
+        # --- attese dei singoli clienti: (istante in cui vengono serviti, attesa) ---
+        # registrate dall'istante 0 (anche prima di warmup), solo per i grafici dei dati grezzi
+        self.waitTimesInLoco = []
+        self.waitsInLoco = []
+        self.waitTimesOnLine = []
+        self.waitsOnLine = []
+
 
     # ------------------------------------------------------------------
     # Da chiamare a ogni evento, PRIMA di processarlo
@@ -125,6 +132,8 @@ class Metrics:
 
     def recordInLocoWait(self, standLocation: tuple[int, int], waitedTime: int, time: int) -> None:
         # quando un cliente in loco parte dallo stand
+        self.waitTimesInLoco.append(time)
+        self.waitsInLoco.append(waitedTime)
         if not self._inWindow(time):
             return
         self.nUserInLoco += 1
@@ -135,6 +144,8 @@ class Metrics:
 
     def recordOnLineWait(self, waitedTime: int, time: int) -> None:
         # quando il taxi raggiunge un cliente online
+        self.waitTimesOnLine.append(time)
+        self.waitsOnLine.append(waitedTime)
         if not self._inWindow(time):
             return
         self.nUserOnLine += 1
@@ -225,4 +236,12 @@ class Metrics:
             "idleTaxi": list(self.segIdleTaxi),
             "queueInLoco": list(self.segQueueInLoco),
             "queueOnLine": list(self.segQueueOnLine),
+        }
+
+
+    def waitSeries(self) -> dict:
+        # attesa di ogni cliente servito, con l'istante in cui è stato servito (da t=0)
+        return {
+            "timesInLoco": list(self.waitTimesInLoco), "waitsInLoco": list(self.waitsInLoco),
+            "timesOnLine": list(self.waitTimesOnLine), "waitsOnLine": list(self.waitsOnLine),
         }
