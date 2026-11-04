@@ -18,17 +18,23 @@ if TYPE_CHECKING:               # solo per le annotazioni (evita l'import circol
     from Simulation import Parameters
 
 
-def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalReports: list[dict]) -> None:
+def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalReports: list[dict],
+                stable: bool | None = None) -> None:
     """Aggiunge a results.csv una riga per replica (un solo file per tutte le run)."""
     params = asdict(p)
     params["capacity"] = "-".join(str(c) for c in p.capacityList())
-    columns = ["runId", "replica", "seed"] + list(params) + list(globalReports[0])
+    columns = ["runId", "replica", "seed"] + list(params) + list(globalReports[0]) + ["stable"]
 
     path = outDir / "results.csv"
     if path.exists() and path.stat().st_size > 0:
         with open(path, newline="") as f:
             oldColumns = next(csv.reader(f))
-        if oldColumns != columns:
+        if oldColumns == columns[:-1]:                      # results.csv di prima di "stable": aggiungo la colonna vuota
+            with open(path, newline="") as f:
+                rows = list(csv.reader(f))
+            with open(path, "w", newline="") as f:
+                csv.writer(f).writerows([rows[0] + ["stable"]] + [row + [""] for row in rows[1:]])
+        elif oldColumns != columns:
             raise ValueError(f"{path} ha colonne diverse da quelle attuali: "
                              "cambia outDir o rinomina il vecchio file")
     else:
@@ -38,7 +44,8 @@ def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalRepo
     with open(path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
         for i, g in enumerate(globalReports):
-            writer.writerow({"runId": runId, "replica": i, "seed": seed, **params, **g})
+            writer.writerow({"runId": runId, "replica": i, "seed": seed, **params, **g,
+                                 "stable": "" if stable is None else stable})
 
 
 def saveWarmupPlot(plotsDir: Path, p: "Parameters", runId: str, seed: int, warmupSeries: list[dict], overrides: dict,
@@ -49,6 +56,8 @@ def saveWarmupPlot(plotsDir: Path, p: "Parameters", runId: str, seed: int, warmu
     è instabile non c'è linea. Senza analisi di Welch è warmupTime, come prima."""
     if welchResult is None:
         mark, note = p.warmupTime, "fine del warm-up"
+    elif welchResult["status"] == "stable":                 # stabilityOnly: nessun warm-up da mostrare
+        mark, note = None, "analisi di sola stabilità: nessun warm-up"
     elif welchResult["warmup"] is None:
         mark, note = None, "configurazione probabilmente instabile: nessun warm-up"
     else:
@@ -112,8 +121,9 @@ def saveWelchPlots(plotsDir: Path, runId: str, seed: int, r: dict, overrides: di
         ax.plot(x, a["ybar"][key], color="gray", alpha=0.35, linewidth=0.8, label="Ybar (media sulle repliche)")
         for i, (w, curve) in enumerate(a["welch"][key].items()):
             ax.plot(x[:len(curve)], curve, color=f"C{i}", linewidth=1.6, label=f"Welch w={w}")
-        ax.axvline(r["mser"][key], color="gray", linestyle=":", linewidth=1.2,
-                   label=f"MSER-5 ({label}): {r['mser'][key]}")
+        if r["mser"] is not None:
+            ax.axvline(r["mser"][key], color="gray", linestyle=":", linewidth=1.2,
+                       label=f"MSER-5 ({label}): {r['mser'][key]}")
         if r["warmup"] is not None:
             ax.axvline(r["warmup"], color="red", linestyle="--", linewidth=1, label=f"warm-up: {r['warmup']}")
         ax.set_xlabel(f"tempo (passi); intervalli di {a['delta']} passi")

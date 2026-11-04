@@ -23,10 +23,16 @@ def meanAndCI(values: list[float]) -> tuple[float, float]:
 
 
 def analyzeWarmup(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...],
-                  manualWarmup: int | None) -> dict:
+                  manualWarmup: int | None, stabilityOnly: bool = False) -> dict:
     """Welch + MSER-5 + controllo di stabilità + stima finale (replication/deletion).
     status: "ok" (l stimato), "unstable" (nessun warm-up restituito), "manual" (l passato a mano)."""
     a = Welch.analyze(stateSeries, maxTime, delta, ws)
+    if stabilityOnly:
+        # solo stabilità: curve di Welch e controllo di trend; niente MSER-5, warm-up l e stima finale.
+        # status: "stable" (nessun trend crescente nella 2a metà) oppure "unstable"
+        return {"warmup": None, "status": "unstable" if a["unstable"] else "stable", "unstable": a["unstable"],
+                "delta": delta, "ws": a["ws"], "mser": None, "mserAtLimit": [],
+                "trend": a["trend"], "estimate": None, "analysis": a}
     if manualWarmup is not None:
         l, status = manualWarmup, "manual"
     elif a["unstable"]:
@@ -49,6 +55,16 @@ def analyzeWarmup(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[i
 
 
 def printWelch(r: dict) -> None:
+    if r["mser"] is None:                                   # modalità stabilityOnly
+        print(f"    --- stabilità (Welch, delta={r['delta']}) ---")
+        for k in Welch.METRICS:
+            t = r["trend"][k]
+            flag = "  <-- trend crescente" if t["unstable"] else ""
+            print(f"    {k}: 2a metà: livello {t['level']:.3f}, aumento {t['rise']:+.3f} "
+                  f"(pendenza {t['slope']:.2e}/passo, t={t['t']:.2f}){flag}")
+        print("    ESITO: " + ("INSTABILE (trend crescente: nessuno stato stazionario)" if r["unstable"]
+                              else "STABILE (nessun trend crescente nella 2a metà)"))
+        return
     print(f"    --- warm-up (Welch, delta={r['delta']}, MSER-5) ---")
     for k in Welch.METRICS:
         t = r["trend"][k]
