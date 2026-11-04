@@ -97,11 +97,8 @@ class Simulation:
 
     Ogni run() lancia nReplications repliche indipendenti e salva in outDir:
         - results.csv: UNA riga per replica, per tutte le run (viene sempre aggiunto in fondo)
-        - plots/<parametri>/<runId>_warmup.png: grafico del warm-up della run (linea rossa = warm-up stimato)
         - plots/<parametri>/<runId>_welch_<metrica>.png: metodo di Welch, uno per metrica (con welch=True)
-        - plots/<parametri>/<runId>_warmup_from_l.png: medie cumulative ripartite da l (con cumulativeFromWarmup=True)
           (<parametri> = i parametri passati a run(), es. nTaxi=6_reachProb=0.3; "base" se non ce ne sono)
-        - warmup_estimates.csv: warm-up (MSER-5), controllo di stabilità e stima finale, per run e metrica
         - logs/<runId>.txt: log della prima replica (solo con log=True)
 
     Seed: se seed=None (default) a ogni chiamata viene estratto un seed nuovo, quindi due
@@ -138,26 +135,19 @@ class Simulation:
 
     def run(self, nReplications: int = 10, seed: int | None = None, verbose: bool = True,
             welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (1, 2, 5, 10, 20),
-            warmup: int | None = None, cumulativeFromWarmup: bool = False, stabilityOnly: bool = False,
             plotFolders: bool = True, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
         (solo per questa run) e salva i risultati. Restituisce un dizionario con
         runId, seed, params, replicas (report globali), standReports, mean, ci, welch.
 
-        Analisi del warm-up (non cambia results.csv, che usa sempre warmupTime):
-          welch                 : metodo di Welch + MSER-5 + controllo di stabilità + stima finale
+        Analisi di stabilità (non cambia i risultati in results.csv, tranne la colonna `stable`):
+          welch                 : grafici di Welch + controllo di trend nella 2a metà (colonna `stable` di results.csv)
           welchDelta, welchWs   : ampiezza degli intervalli (passi) e semi-ampiezze w delle medie mobili
-          warmup                : warm-up l scelto a mano (passi); None = stima automatica (max di MSER-5)
-          cumulativeFromWarmup  : salva anche le medie cumulative ripartite da l (verifica della "pancia")
-          stabilityOnly         : True = solo stabilità: grafici di Welch + controllo di trend, senza MSER-5, warm-up l,
-                                  stima finale, warmup_estimates.csv (incompatibile con warmup e cumulativeFromWarmup)
           plotFolders           : True = i grafici di ogni run vanno in plots/<parametri>/ (es. plots/nTaxi=6_reachProb=0.3/);
                                   False = tutti insieme in plots/
         """
         self.p = replace(self.baseParams, **overrides)      # TypeError se un nome non esiste
         self.p.validate()
-        if stabilityOnly and (warmup is not None or cumulativeFromWarmup or not welch):
-            raise ValueError("stabilityOnly richiede welch=True e non si usa con warmup o cumulativeFromWarmup")
 
         seedSeq = np.random.SeedSequence(seed)               # seed=None: entropia nuova a ogni chiamata
         replicaSeeds = seedSeq.spawn(nReplications)          # un flusso indipendente per replica
@@ -167,28 +157,20 @@ class Simulation:
         self.plotsDir = Output.makePlotsDir(self.outDir, overrides, plotFolders)
         logPath = self.outDir / "logs" / f"{runId}.txt" if self.log else None
 
-        globalReports, standReports, warmupSeries, stateSeries = [], [], [], []
+        globalReports, standReports, stateSeries = [], [], []
         for i, replicaSeed in enumerate(replicaSeeds):
             g, s = self.runReplica(replicaSeed, logPath if i == 0 else None)
             globalReports.append(g)
             standReports.append(s)
-            warmupSeries.append(self.metrics.warmupSeries())
             if welch:
                 stateSeries.append(self.metrics.stateSeries())
 
-        welchResult = Analysis.analyzeWarmup(stateSeries, self.p.maxTime, welchDelta, welchWs, warmup,
-                                                 stabilityOnly) if welch else None
-        mark = welchResult["warmup"] if welchResult else None
+        welchResult = Analysis.analyzeStability(stateSeries, self.p.maxTime, welchDelta, welchWs) if welch else None
 
         stable = None if welchResult is None else not welchResult["unstable"]      # per results.csv (vuoto senza welch)
         Output.saveResults(self.outDir, self.p, runId, seedSeq.entropy, globalReports, stable) # type: ignore
-        Output.saveWarmupPlot(self.plotsDir, self.p, runId, seedSeq.entropy, warmupSeries, overrides, welchResult) # type: ignore
         if welchResult:
             Output.saveWelchPlots(self.plotsDir, runId, seedSeq.entropy, welchResult, overrides) # type: ignore
-            if not stabilityOnly:
-                Output.saveWarmupEstimates(self.outDir, runId, seedSeq.entropy, welchResult, nReplications) # type: ignore
-            if cumulativeFromWarmup and mark is not None:
-                Output.saveWarmupFromPlot(self.plotsDir, self.p, runId, seedSeq.entropy, stateSeries, mark, overrides) # type: ignore
 
         mean, ci = {}, {}
         for key in globalReports[0]:

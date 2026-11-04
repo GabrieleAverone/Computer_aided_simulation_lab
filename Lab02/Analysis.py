@@ -1,5 +1,4 @@
-"""Analisi statistica dei risultati: medie e intervalli di confidenza, warm-up (Welch + MSER-5),
-controllo di stabilità. Non dipende da matplotlib né dalla simulazione: lavora su serie e report."""
+"""Analisi statistica dei risultati: medie e intervalli di confidenza, metodo di Welch e controllo di stabilità. Non dipende da matplotlib né dalla simulazione: lavora su serie e report."""
 
 import Welch
 
@@ -22,63 +21,20 @@ def meanAndCI(values: list[float]) -> tuple[float, float]:
 
 
 
-def analyzeWarmup(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...],
-                  manualWarmup: int | None, stabilityOnly: bool = False) -> dict:
-    """Welch + MSER-5 + controllo di stabilità + stima finale (replication/deletion).
-    status: "ok" (l stimato), "unstable" (nessun warm-up restituito), "manual" (l passato a mano)."""
+def analyzeStability(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...]) -> dict:
+    """Curve di Welch + controllo di trend nella seconda metà della run.
+    status: "stable" (nessun trend crescente) oppure "unstable"."""
     a = Welch.analyze(stateSeries, maxTime, delta, ws)
-    if stabilityOnly:
-        # solo stabilità: curve di Welch e controllo di trend; niente MSER-5, warm-up l e stima finale.
-        # status: "stable" (nessun trend crescente nella 2a metà) oppure "unstable"
-        return {"warmup": None, "status": "unstable" if a["unstable"] else "stable", "unstable": a["unstable"],
-                "delta": delta, "ws": a["ws"], "mser": None, "mserAtLimit": [],
-                "trend": a["trend"], "estimate": None, "analysis": a}
-    if manualWarmup is not None:
-        l, status = manualWarmup, "manual"
-    elif a["unstable"]:
-        l, status = None, "unstable"
-    else:
-        l, status = a["warmup"], "ok"
-
-    estimate = None
-    if l is not None:
-        if not 0 <= l < maxTime:
-            raise ValueError("warmup deve essere in [0, maxTime)")
-        means = Welch.deletionMeans(stateSeries, l, maxTime)
-        estimate = {key: dict(zip(("mean", "ci"), meanAndCI(vals))) for key, vals in means.items()}
-
-    return {"warmup": l, "status": status, "unstable": a["unstable"], "delta": delta, "ws": a["ws"],
-            "mser": {k: r["l"] for k, r in a["mser"].items()},
-            "mserAtLimit": [k for k, r in a["mser"].items() if r["atLimit"]],
-            "trend": a["trend"], "estimate": estimate, "analysis": a}
-
+    return {"status": "unstable" if a["unstable"] else "stable", "unstable": a["unstable"],
+            "delta": delta, "ws": a["ws"], "trend": a["trend"], "analysis": a}
 
 
 def printWelch(r: dict) -> None:
-    if r["mser"] is None:                                   # modalità stabilityOnly
-        print(f"    --- stabilità (Welch, delta={r['delta']}) ---")
-        for k in Welch.METRICS:
-            t = r["trend"][k]
-            flag = "  <-- trend crescente" if t["unstable"] else ""
-            print(f"    {k}: 2a metà: livello {t['level']:.3f}, aumento {t['rise']:+.3f} "
-                  f"(pendenza {t['slope']:.2e}/passo, t={t['t']:.2f}){flag}")
-        print("    ESITO: " + ("INSTABILE (trend crescente: nessuno stato stazionario)" if r["unstable"]
-                              else "STABILE (nessun trend crescente nella 2a metà)"))
-        return
-    print(f"    --- warm-up (Welch, delta={r['delta']}, MSER-5) ---")
+    print(f"    --- stabilità (Welch, delta={r['delta']}) ---")
     for k in Welch.METRICS:
         t = r["trend"][k]
         flag = "  <-- trend crescente" if t["unstable"] else ""
-        print(f"    {k}: MSER-5 l={r['mser'][k]}, 2a metà: livello {t['level']:.3f}, "
-              f"aumento {t['rise']:+.3f} (pendenza {t['slope']:.2e}/passo, t={t['t']:.2f}){flag}")
-    if r["mserAtLimit"]:
-        print(f"    attenzione: MSER-5 sul limite massimo per {r['mserAtLimit']} (warm-up non ben determinato)")
-    if r["status"] == "unstable":
-        print("    ESITO: probabilmente instabile / nessuno stato stazionario -> nessun warm-up restituito")
-        return
-    origin = "manuale" if r["status"] == "manual" else "max tra le metriche"
-    print(f"    ESITO: warm-up l = {r['warmup']} passi ({origin})"
-          + ("  [ATTENZIONE: la configurazione sembra instabile]" if r["unstable"] else ""))
-    print("    stima replication/deletion (media ± IC95%, dati dopo l):")
-    for k, e in r["estimate"].items():
-        print(f"      {k}: {e['mean']:.4f} ± {e['ci']:.4f}")
+        print(f"    {k}: 2a metà: livello {t['level']:.3f}, aumento {t['rise']:+.3f} "
+              f"(pendenza {t['slope']:.2e}/passo, t={t['t']:.2f}){flag}")
+    print("    ESITO: " + ("INSTABILE (trend crescente: nessuno stato stazionario)" if r["unstable"]
+                          else "STABILE (nessun trend crescente nella 2a metà)"))
