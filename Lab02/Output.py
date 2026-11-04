@@ -28,14 +28,20 @@ def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalRepo
     if path.exists() and path.stat().st_size > 0:
         with open(path, newline="") as f:
             oldColumns = next(csv.reader(f))
-        if oldColumns == columns[:-1]:                      # results.csv di prima di "stable": aggiungo la colonna vuota
+        if oldColumns != columns:
+            # file vecchio: si completa solo se mancano parametri nuovi (valore di default) o `stable` (vuoto)
+            defaults = {k: str(v) for k, v in asdict(type(p)()).items()}
+            missing = [c for c in columns if c not in oldColumns]
+            if [c for c in oldColumns if c not in columns] or any(c not in defaults and c != "stable" for c in missing):
+                raise ValueError(f"{path} ha colonne diverse da quelle attuali: "
+                                 "cambia outDir o rinomina il vecchio file")
             with open(path, newline="") as f:
-                rows = list(csv.reader(f))
+                rows = list(csv.DictReader(f))
             with open(path, "w", newline="") as f:
-                csv.writer(f).writerows([rows[0] + ["stable"]] + [row + [""] for row in rows[1:]])
-        elif oldColumns != columns:
-            raise ValueError(f"{path} ha colonne diverse da quelle attuali: "
-                             "cambia outDir o rinomina il vecchio file")
+                writer = csv.DictWriter(f, fieldnames=columns)
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow({**{c: defaults.get(c, "") for c in missing}, **row})
     else:
         with open(path, "w", newline="") as f:
             csv.writer(f).writerow(columns)
