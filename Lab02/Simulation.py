@@ -46,6 +46,7 @@ class Parameters:
     redistribution: bool = True         # dopo una corsa il taxi va verso lo stand con clienti in coda
     rebalance: bool = True              # un cliente in coda richiama un taxi fermo da un altro stand
     rebalanceReserve: int = 1           # uno stand cede un taxi solo se ne ha più di questi fermi
+    onlinePriority: bool = True         # dopo una corsa il taxi va prima da un cliente online in coda; False = torna a uno stand
 
     # clienti
     reachProb: float = 0.5              # probabilità che un cliente sia "in loco"
@@ -375,7 +376,7 @@ class Simulation:
         currentUser = self.getEventUser(currentEvent)
         self.metrics.incrementRideCounter(time)      # la corsa è completata
 
-        if self.taxiStands.hasOnlineUser():
+        if self.p.onlinePriority and self.taxiStands.hasOnlineUser():
             nextUser = self.taxiStands.getOnlineUser()
             self.writeLog(f"Taxi serves the first user of the online queue: user {nextUser}")
             timeToUser = getTimeByTaxi(currentUser.getDestination(), nextUser.getSpawnLocation())
