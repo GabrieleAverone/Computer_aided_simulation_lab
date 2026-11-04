@@ -137,11 +137,11 @@ def trendCheck(Y: np.ndarray, delta: int, w: int, maxTime: int,
 # Analisi di una configurazione
 # ------------------------------------------------------------------
 def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 10, 20),
-            trendW: int = 10) -> dict:
+            trendW: int = 10, **trendThresholds) -> dict:
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
         welch      : per metrica, {w: curva} per ogni w ammesso (w <= m/4)
-        trend      : per metrica, risultato di trendCheck()
+        trend      : per metrica, risultato di trendCheck() (trendThresholds = soglie: relTol, absTol, strongRel, strongAbs)
         unstable   : True se almeno una metrica ha un trend crescente significativo
     """
     Y = buildMatrices(allSeries, maxTime, delta)
@@ -150,7 +150,7 @@ def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 
     okWs = [w for w in ws if w <= m / 4]
     welch = {k: {w: welchMovingAverage(ybar[k], w) for w in okWs} for k in METRICS}
     wTrend = min(trendW, m // 4)
-    trend = {k: trendCheck(Y[k], delta, wTrend, maxTime) for k in METRICS}
+    trend = {k: trendCheck(Y[k], delta, wTrend, maxTime, **trendThresholds) for k in METRICS}
     unstable = any(t["unstable"] for t in trend.values())
     return {"delta": delta, "m": m, "ws": okWs, "trendW": wTrend, "Y": Y, "ybar": ybar,
             "welch": welch, "trend": trend, "unstable": unstable}

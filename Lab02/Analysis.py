@@ -21,10 +21,11 @@ def meanAndCI(values: list[float]) -> tuple[float, float]:
 
 
 
-def analyzeStability(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...]) -> dict:
+def analyzeStability(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...],
+                     **trendThresholds: float) -> dict:
     """Curve di Welch + controllo di trend nella seconda metà della run.
     status: "stable" (nessun trend crescente) oppure "unstable"."""
-    a = Welch.analyze(stateSeries, maxTime, delta, ws)
+    a = Welch.analyze(stateSeries, maxTime, delta, ws, **trendThresholds)
     return {"status": "unstable" if a["unstable"] else "stable", "unstable": a["unstable"],
             "delta": delta, "ws": a["ws"], "trend": a["trend"], "analysis": a}
 
