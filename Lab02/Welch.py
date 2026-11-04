@@ -160,7 +160,7 @@ def trendCheck(Y: np.ndarray, delta: int, w: int, maxTime: int,
 # ------------------------------------------------------------------
 # Analisi di una configurazione
 # ------------------------------------------------------------------
-def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(2, 5, 10, 20),
+def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 10, 20),
             trendW: int = 10, batch: int = 5) -> dict:
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
