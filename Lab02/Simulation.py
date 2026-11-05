@@ -12,6 +12,7 @@ from User import User
 from Events import Event
 from FutureEventSet import FutureEventSet
 from Metrics import Metrics
+from warmup import MultiWarmupDetector, WarmupDetector
 import Analysis
 import Output
 from Analysis import meanAndCI
@@ -59,7 +60,17 @@ class Parameters:
 
     # durata
     maxTime: int = 50000
-    warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche
+    warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche (se warmupAuto=False)
+
+    # warm-up automatica (WarmupDetector su clienti in attesa e frazione di taxi occupati)
+    warmupAuto: bool = False            # True = le statistiche partono quando il detector dichiara finita la warm-up
+    warmupBatch: int = 50
+    warmupK: int = 10
+    warmupEps: float = 0.05
+    warmupPatience: int = 5
+    warmupMinT: int = 500
+    warmupAbsTol: float = 0.5
+    warmupMaxT: int | None = None       # None = maxTime
 
     def capacityList(self) -> list[int]:
         if self.capacity is None:
@@ -444,6 +455,25 @@ class Simulation:
             self.sendTaxiToStand(time, standLocation, nextStandLocation)
 
 
+    def feedWarmupDetector(self, time: int) -> None:
+        """Lo stato corrente vale sui tick [lastTime, time): li dà al detector. Quando scatta,
+        le statistiche partono da quel tick (non da warmup_end: ciò che c'è prima non è stato accumulato)."""
+        det = self.warmupDetector
+        if det.stationary is not None:
+            return
+        ts = self.taxiStands
+        waiting = ts.getTotalInLoco() + ts.getTotalOnline()
+        busy = 1 - sum(s.nTaxi for s in ts.stands.values()) / self.p.nTaxi
+        for t in range(self.metrics.lastTime, min(time, self.p.maxTime + 1)):
+            self.tickSeries[0].append(waiting)
+            self.tickSeries[1].append(busy)
+            if det.update(t, (waiting, busy)):
+                self.metrics.warmup = t
+                return
+            if det.stationary is False:     # timeout: sistema non stazionario
+                return
+
+
     # ============================ SINGOLA REPLICA ============================
 
     def runReplica(self, seed: np.random.SeedSequence, logPath: Path | None = None) -> tuple[dict, dict]:
@@ -458,7 +488,15 @@ class Simulation:
         self.taxiStands = TaxiStands(self.p.capacityList(), standsCoord)
         self.taxiStands.distributeTaxi(self.p.nTaxi, policy=self.p.policy)
 
-        self.metrics = Metrics(standsCoord, self.p.warmupTime, self.p.maxTime)
+        # warm-up automatica: le statistiche restano spente (warmup = maxTime) finché il detector non scatta
+        p = self.p
+        self.warmupDetector = self.tickSeries = None
+        if p.warmupAuto:
+            kw = dict(batch=p.warmupBatch, k=p.warmupK, eps=p.warmupEps, patience=p.warmupPatience,
+                      min_t=p.warmupMinT, abs_tol=p.warmupAbsTol, max_t=p.warmupMaxT or p.maxTime)
+            self.warmupDetector = MultiWarmupDetector([WarmupDetector(**kw), WarmupDetector(**kw)])
+            self.tickSeries = ([], [])      # per tick: clienti in attesa, frazione taxi occupati
+        self.metrics = Metrics(standsCoord, p.maxTime if p.warmupAuto else p.warmupTime, p.maxTime)
 
         self.FES = FutureEventSet()
         self.FES.insertEvent(self.createSpawnEvent(0))
@@ -482,6 +520,8 @@ class Simulation:
                     self.writeLog(f"Time {time} > maxTime ({self.p.maxTime}): end of the simulation")
                     break
 
+                if self.warmupDetector is not None:
+                    self.feedWarmupDetector(time)
                 self.metrics.update(time, self.taxiStands)
 
                 handler = self.handlers.get(currentEvent.getType())

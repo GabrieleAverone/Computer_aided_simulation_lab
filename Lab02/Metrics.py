@@ -146,7 +146,7 @@ class Metrics:
     # Risultati finali
     # ------------------------------------------------------------------
     def globalReport(self, nTaxi: int, taxiStands=None) -> dict:
-        endTime = self.endTime - self.warmup      # durata della finestra di misura
+        endTime = max(1, self.endTime - self.warmup)      # durata della finestra di misura
         idleAcc = sum(self.idleTaxiAccPerStand.values())
         totalTaxiTime = endTime * nTaxi
 
@@ -173,7 +173,7 @@ class Metrics:
 
 
     def standReport(self) -> dict:
-        endTime = self.endTime - self.warmup
+        endTime = max(1, self.endTime - self.warmup)
         report = {}
         for pos in self.standPositions:
             n = self.nUserInLocoPerStand[pos]
