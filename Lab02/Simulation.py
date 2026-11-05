@@ -147,7 +147,7 @@ class Simulation:
 
     def run(self, nReplications: int = 10, seed: int | None = None, verbose: bool = True,
             welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (1, 2, 5, 10, 20),
-            trendRelTol: float | None = None, trendAbsTol: float | None = None,
+            returnSeries: bool = False, trendRelTol: float | None = None, trendAbsTol: float | None = None,
             plotFolders: bool = True, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
         (solo per questa run) e salva i risultati. Restituisce un dizionario con
@@ -161,6 +161,8 @@ class Simulation:
                                   La 2a metà della run è divisa in 4 blocchi: una replica è instabile se, per almeno una
                                   coda (in loco / online), le medie dei blocchi crescono sempre e l'aumento
                                   (ultimo - primo) supera max(trendRelTol * livello medio, trendAbsTol)
+          returnSeries          : True = nel risultato anche `stateSeries` (serie a tratti costanti di ogni replica,
+                                  per i grafici del warm-up detector)
           plotFolders           : True = i grafici di ogni run vanno in plots/<parametri>/ (es. plots/nTaxi=6_reachProb=0.3/);
                                   False = tutti insieme in plots/
         """
@@ -175,14 +177,15 @@ class Simulation:
         self.plotsDir = Output.makePlotsDir(self.outDir, overrides, plotFolders)
         logPath = self.outDir / "logs" / f"{runId}.txt" if self.log else None
 
-        globalReports, standReports, stateSeries, warmupMeans, warmupEnds = [], [], [], [], []
+        globalReports, standReports, stateSeries, warmupMeans, warmupEnds, warmupEndTimes = [], [], [], [], [], []
         for i, replicaSeed in enumerate(replicaSeeds):
             g, s = self.runReplica(replicaSeed, logPath if i == 0 else None)
             globalReports.append(g)
             standReports.append(s)
             warmupMeans.append(self.warmupDetector.windowMeans)
             warmupEnds.append(self.warmupDetector.detectionTime)   # None = non rilevata
-            if welch:
+            warmupEndTimes.append(self.warmupDetector.windowEndTimes)
+            if welch or returnSeries:
                 stateSeries.append(self.metrics.stateSeries())
 
         thresholds = {"relTol": trendRelTol, "absTol": trendAbsTol}
@@ -210,7 +213,8 @@ class Simulation:
                 Analysis.printWelch(welchResult)
 
         return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p), "plotsDir": str(self.plotsDir),
-                "warmupEndTimes": warmupEnds, "warmupWindowMeans": warmupMeans, "replicas": globalReports, "standReports": standReports, "mean": mean, "ci": ci,
+                "warmupEndTimes": warmupEnds, "warmupWindowMeans": warmupMeans, "warmupWindowEndTimes": warmupEndTimes,
+                "stateSeries": stateSeries if returnSeries else None, "replicas": globalReports, "standReports": standReports, "mean": mean, "ci": ci,
                 "welch": None if welchResult is None else {k: v for k, v in welchResult.items() if k != "analysis"}}
 
 
@@ -501,7 +505,8 @@ class Simulation:
                 wasDone = self.warmupDetector.warmupDone
                 if self.warmupDetector.update(time, {
                         "queueInLoco": self.taxiStands.getTotalInLoco(),
-                        "queueOnLine": self.taxiStands.getTotalOnline()}):
+                        "queueOnLine": self.taxiStands.getTotalOnline(),
+                        "queueTotal": self.taxiStands.getTotalInLoco() + self.taxiStands.getTotalOnline()}):
                     self.writeLog(f"Warm-up detector, window {self.warmupDetector.nWindows - 1} closed: "
                                   f"{ {v: m[-1] for v, m in self.warmupDetector.windowMeans.items()} }")
                     if self.warmupDetector.warmupDone and not wasDone:

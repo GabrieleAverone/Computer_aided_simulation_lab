@@ -27,7 +27,7 @@ class WarmupDetector:
         detector.windowMeans["queueInLoco"]      # [m_0, m_1, ...] finestre completate
     """
 
-    def __init__(self, windowSize: int, variables: tuple[str, ...] = ("queueInLoco", "queueOnLine"),
+    def __init__(self, windowSize: int, variables: tuple[str, ...] = ("queueInLoco", "queueOnLine", "queueTotal"),
                  t: int = 5, eps: float = 0.05, delta: float = 1.0, confirm: int = 2) -> None:
         if windowSize < 1 or t < 1 or confirm < 1:
             raise ValueError("windowSize, t e confirm devono essere >= 1")
