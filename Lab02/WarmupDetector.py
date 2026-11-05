@@ -13,7 +13,11 @@ class WarmupDetector:
     Fine del warm-up: dalla finestra k (con almeno t finestre precedenti) si calcola, per ogni variabile,
 
         ref_k = media di m_{k-t}, ..., m_{k-1}
-        stabile  se  |m_k - ref_k| / max(ref_k, delta) < eps
+        stabile  se  |m_k - ref_k| / max(ref_k, delta) < eps          (tolleranza relativa)
+
+    oppure, se si passa absTol, con tolleranza ASSOLUTA (in clienti, eps e delta si ignorano):
+
+        stabile  se  |m_k - ref_k| < absTol
 
     La finestra k è "stabile" se lo sono TUTTE le variabili. Il warm-up è finito quando si hanno
     `confirm` finestre stabili consecutive: il detector lo segnala (warmupDone, detectionTime,
@@ -28,11 +32,13 @@ class WarmupDetector:
     """
 
     def __init__(self, windowSize: int, variables: tuple[str, ...] = ("queueInLoco", "queueOnLine", "queueTotal"),
-                 t: int = 5, eps: float = 0.05, delta: float = 1.0, confirm: int = 2) -> None:
+                 t: int = 5, eps: float = 0.05, delta: float = 1.0, confirm: int = 2,
+                 absTol: float | None = None) -> None:
         if windowSize < 1 or t < 1 or confirm < 1:
             raise ValueError("windowSize, t e confirm devono essere >= 1")
-        if eps <= 0 or delta <= 0:
-            raise ValueError("eps e delta devono essere > 0")
+        if eps <= 0 or delta <= 0 or (absTol is not None and absTol <= 0):
+            raise ValueError("eps, delta e absTol devono essere > 0")
+        self.absTol = absTol
         self.windowSize = windowSize
         self.t = t
         self.eps = eps
@@ -102,7 +108,11 @@ class WarmupDetector:
         for v in self.variables:
             means = self.windowMeans[v]
             ref = sum(means[k - self.t:k]) / self.t
-            if abs(means[k] - ref) / max(ref, self.delta) >= self.eps:
+            diff = abs(means[k] - ref)
+            if self.absTol is not None:
+                if diff >= self.absTol:
+                    return False
+            elif diff / max(ref, self.delta) >= self.eps:
                 return False
         return True
 
