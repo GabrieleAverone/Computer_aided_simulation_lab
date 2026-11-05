@@ -143,11 +143,13 @@ class Simulation:
         runId, seed, params, replicas (report globali), standReports, mean, ci, welch.
 
         Analisi di stabilità (non cambia i risultati in results.csv, tranne la colonna `stable`):
-          welch                 : grafici di Welch + controllo di stabilità a blocchi (colonna `stable` di results.csv)
+          welch                 : grafici di Welch + controllo di stabilità a blocchi per replica
+                                  (colonne `stable` per replica e `pUnstable` per configurazione in results.csv)
           welchDelta, welchWs   : ampiezza degli intervalli (passi) e semi-ampiezze w delle medie mobili
-          trendRelTol, trendAbsTol : soglie del controllo (None = default di Welch.blockCheck: 0.10, 0.10). La 2a metà
-                                  della run è divisa in 4 blocchi: instabile se le medie dei blocchi crescono sempre e
-                                  l'aumento (ultimo - primo) supera max(trendRelTol * livello medio, trendAbsTol)
+          trendRelTol, trendAbsTol : soglie del controllo (None = default di Welch.blockCheckRow: 0.25, 2.0 clienti).
+                                  La 2a metà della run è divisa in 4 blocchi: una replica è instabile se, per almeno una
+                                  coda (in loco / online), le medie dei blocchi crescono sempre e l'aumento
+                                  (ultimo - primo) supera max(trendRelTol * livello medio, trendAbsTol)
           plotFolders           : True = i grafici di ogni run vanno in plots/<parametri>/ (es. plots/nTaxi=6_reachProb=0.3/);
                                   False = tutti insieme in plots/
         """
@@ -175,8 +177,10 @@ class Simulation:
         welchResult = (Analysis.analyzeStability(stateSeries, self.p.maxTime, welchDelta, welchWs, **thresholds)
                        if welch else None)
 
-        stable = None if welchResult is None else not welchResult["unstable"]      # per results.csv (vuoto senza welch)
-        Output.saveResults(self.outDir, self.p, runId, seedSeq.entropy, globalReports, stable) # type: ignore
+        # per results.csv (vuoto senza welch): `stable` per replica, `pUnstable` per configurazione
+        stable = None if welchResult is None else [not bool(u) for u in welchResult["unstableReplicas"]]
+        pUnstable = None if welchResult is None else welchResult["pUnstable"]
+        Output.saveResults(self.outDir, self.p, runId, seedSeq.entropy, globalReports, stable, pUnstable) # type: ignore
         if welchResult:
             Output.saveWelchPlots(self.plotsDir, runId, seedSeq.entropy, welchResult, overrides) # type: ignore
 

@@ -17,6 +17,7 @@ Passi:
 import numpy as np
 
 METRICS = ("idleTaxi", "queueInLoco", "queueOnLine")
+QUEUE_METRICS = ("queueInLoco", "queueOnLine")      # idleTaxi escluso dal test di stabilità
 
 
 
@@ -79,22 +80,41 @@ def intervalCenters(m: int, delta: int) -> np.ndarray:
 # ------------------------------------------------------------------
 # 4. Controllo di stabilità
 # ------------------------------------------------------------------
-def blockCheck(Y: np.ndarray, delta: int, maxTime: int, nBlocks: int = 4,
-               relTol: float = 0.10, absTol: float = 0.10) -> dict:
-    """Controllo di stabilità: nella seconda metà la media cresce blocco dopo blocco?
+def blockCheckRow(y: np.ndarray, delta: int, maxTime: int, nBlocks: int = 4,
+                  relTol: float = 0.25, absTol: float = 2.0) -> dict:
+    """Controllo di stabilità su UNA serie (una riga di Y): nella seconda metà cresce blocco dopo blocco?
     Si prende la seconda metà della run (ascissa > maxTime/2), la si divide in nBlocks blocchi
-    consecutivi e si calcola la media di Ybar (media sulle repliche) in ogni blocco.
-    `unstable` se le medie dei blocchi crescono sempre (ogni blocco > il precedente) e l'aumento
-    totale (ultimo - primo) supera max(relTol * livello medio, absTol)."""
-    x = intervalCenters(Y.shape[1], delta)
-    ybar = verticalMean(Y)[x > maxTime / 2]
-    size = len(ybar) // nBlocks
-    blocks = ybar[:size * nBlocks].reshape(nBlocks, size).mean(axis=1)
+    consecutivi e si calcola la media in ogni blocco.
+    `unstable` se le medie dei blocchi crescono sempre e l'aumento totale (ultimo - primo) supera
+    max(relTol * livello medio, absTol). absTol è in clienti: una coda instabile cresce di centinaia,
+    una stabile oscilla di poche unità."""
+    x = intervalCenters(len(y), delta)
+    y2 = y[x > maxTime / 2]
+    size = len(y2) // nBlocks
+    blocks = y2[:size * nBlocks].reshape(nBlocks, size).mean(axis=1)
     level = float(blocks.mean())
     rise = float(blocks[-1] - blocks[0])
     increasing = bool(np.all(np.diff(blocks) > 0))
     return {"blocks": blocks, "level": level, "rise": rise, "increasing": increasing,
             "unstable": bool(increasing and rise > max(relTol * abs(level), absTol))}
+
+
+def blockCheck(Y: np.ndarray, delta: int, maxTime: int, **thr) -> dict:
+    """Come blockCheckRow, ma sulla media verticale delle repliche (usato per i grafici di Welch)."""
+    return blockCheckRow(verticalMean(Y), delta, maxTime, **thr)
+
+
+def stabilityPerReplica(Y: dict, delta: int, maxTime: int, **thr) -> dict:
+    """Per ogni replica: instabile se ALMENO UNA coda cresce (idleTaxi escluso). Poi riassunto
+    sulla configurazione: pUnstable = frazione di repliche instabili; label = stabile (0),
+    instabile (1) o metastabile (in mezzo)."""
+    n = Y[QUEUE_METRICS[0]].shape[0]
+    unstableRep = np.array([
+        any(blockCheckRow(Y[k][j], delta, maxTime, **thr)["unstable"] for k in QUEUE_METRICS)
+        for j in range(n)])
+    p = float(unstableRep.mean())
+    label = "stabile" if p == 0 else ("instabile" if p == 1 else "metastabile")
+    return {"unstableReplicas": unstableRep, "pUnstable": p, "label": label}
 
 
 # ------------------------------------------------------------------
@@ -105,8 +125,9 @@ def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
         welch      : per metrica, {w: curva} per ogni w ammesso (w <= m/4)
-        trend      : per metrica, risultato di blockCheck() (trendThresholds = soglie: relTol, absTol)
-        unstable   : True se almeno una metrica cresce blocco dopo blocco
+        trend      : per metrica, blockCheck() sulla media verticale (solo per i grafici)
+        unstableReplicas, pUnstable, label : test per replica (stabilityPerReplica; soglie relTol, absTol)
+        unstable   : True se almeno una replica è instabile (label != "stabile")
     """
     Y = buildMatrices(allSeries, maxTime, delta)
     m = Y[METRICS[0]].shape[1]
@@ -114,6 +135,8 @@ def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 
     okWs = [w for w in ws if w <= m / 4]
     welch = {k: {w: welchMovingAverage(ybar[k], w) for w in okWs} for k in METRICS}
     trend = {k: blockCheck(Y[k], delta, maxTime, **trendThresholds) for k in METRICS}
-    unstable = any(t["unstable"] for t in trend.values())
+    perRep = stabilityPerReplica(Y, delta, maxTime, **trendThresholds)
     return {"delta": delta, "m": m, "ws": okWs, "Y": Y, "ybar": ybar,
-            "welch": welch, "trend": trend, "unstable": unstable}
+            "welch": welch, "trend": trend, "unstable": perRep["pUnstable"] > 0,
+            "pUnstable": perRep["pUnstable"], "label": perRep["label"],
+            "unstableReplicas": perRep["unstableReplicas"]}
