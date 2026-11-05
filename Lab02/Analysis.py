@@ -24,9 +24,12 @@ def meanAndCI(values: list[float]) -> tuple[float, float]:
 def analyzeStability(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...],
                      **trendThresholds: float) -> dict:
     """Curve di Welch + controllo a blocchi nella seconda metà della run.
-    status: "stable" (nessun trend crescente) oppure "unstable"."""
+    Il test è per replica: status = "stable" / "metastable" / "unstable" (label stabile/metastabile/instabile),
+    pUnstable = frazione di repliche con una coda che cresce."""
     a = Welch.analyze(stateSeries, maxTime, delta, ws, **trendThresholds)
-    return {"status": "unstable" if a["unstable"] else "stable", "unstable": a["unstable"],
+    status = {"stabile": "stable", "metastabile": "metastable", "instabile": "unstable"}[a["label"]]
+    return {"status": status, "unstable": a["unstable"], "pUnstable": a["pUnstable"], "label": a["label"],
+            "unstableReplicas": a["unstableReplicas"],
             "delta": delta, "ws": a["ws"], "trend": a["trend"], "analysis": a}
 
 
@@ -34,8 +37,11 @@ def printWelch(r: dict) -> None:
     print(f"    --- stabilità (Welch, delta={r['delta']}) ---")
     for k in Welch.METRICS:
         t = r["trend"][k]
-        flag = "  <-- trend crescente" if t["unstable"] else ""
+        flag = "  <-- trend crescente (media)" if t["unstable"] and k in Welch.QUEUE_METRICS else ""
         blocks = " -> ".join(f"{b:.3f}" for b in t["blocks"])
-        print(f"    {k}: 2a metà a blocchi: {blocks} (aumento {t['rise']:+.3f}){flag}")
-    print("    ESITO: " + ("INSTABILE (trend crescente: nessuno stato stazionario)" if r["unstable"]
-                          else "STABILE (nessun trend crescente nella 2a metà)"))
+        print(f"    {k}: 2a metà a blocchi (media repliche): {blocks} (aumento {t['rise']:+.3f}){flag}")
+    n = len(r["unstableReplicas"])
+    print(f"    repliche instabili: {int(r['unstableReplicas'].sum())}/{n} (pUnstable = {r['pUnstable']:.2f})")
+    print("    ESITO: " + {"stable": "STABILE (nessuna replica con coda crescente nella 2a metà)",
+                           "metastable": "METASTABILE (alcune repliche con coda crescente)",
+                           "unstable": "INSTABILE (tutte le repliche con coda crescente)"}[r["status"]])

@@ -18,11 +18,12 @@ if TYPE_CHECKING:               # solo per le annotazioni (evita l'import circol
 
 
 def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalReports: list[dict],
-                stable: bool | None = None) -> None:
-    """Aggiunge a results.csv una riga per replica (un solo file per tutte le run)."""
+                stable: list[bool] | None = None, pUnstable: float | None = None) -> None:
+    """Aggiunge a results.csv una riga per replica (un solo file per tutte le run).
+    `stable`: esito per replica; `pUnstable`: frazione di repliche instabili della configurazione."""
     params = asdict(p)
     params["capacity"] = "-".join(str(c) for c in p.capacityList())
-    columns = ["runId", "replica", "seed"] + list(params) + list(globalReports[0]) + ["stable"]
+    columns = ["runId", "replica", "seed"] + list(params) + list(globalReports[0]) + ["stable", "pUnstable"]
 
     path = outDir / "results.csv"
     if path.exists() and path.stat().st_size > 0:
@@ -32,7 +33,7 @@ def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalRepo
             # file vecchio: si completa solo se mancano parametri nuovi (valore di default) o `stable` (vuoto)
             defaults = {k: str(v) for k, v in asdict(type(p)()).items()}
             missing = [c for c in columns if c not in oldColumns]
-            if [c for c in oldColumns if c not in columns] or any(c not in defaults and c != "stable" for c in missing):
+            if [c for c in oldColumns if c not in columns] or any(c not in defaults and c not in ("stable", "pUnstable") for c in missing):
                 raise ValueError(f"{path} ha colonne diverse da quelle attuali: "
                                  "cambia outDir o rinomina il vecchio file")
             with open(path, newline="") as f:
@@ -50,7 +51,8 @@ def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalRepo
         writer = csv.DictWriter(f, fieldnames=columns)
         for i, g in enumerate(globalReports):
             writer.writerow({"runId": runId, "replica": i, "seed": seed, **params, **g,
-                                 "stable": "" if stable is None else stable})
+                             "stable": "" if stable is None else stable[i],
+                             "pUnstable": "" if pUnstable is None else pUnstable})
 
 
 def makePlotsDir(outDir: Path, overrides: dict, perRun: bool) -> Path:
@@ -92,11 +94,13 @@ def saveWelchPlots(plotsDir: Path, runId: str, seed: int, r: dict, overrides: di
         ax.set_ylabel(f"{label} (media su intervallo)", fontsize=8)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=7, loc="best")
-        if a["trend"][key]["unstable"]:
-            ax.text(0.02, 0.97, "trend crescente nella 2a metà", transform=ax.transAxes,
+        if key in Welch.QUEUE_METRICS and a["trend"][key]["unstable"]:
+            ax.text(0.02, 0.97, "trend crescente nella 2a metà (media repliche)", transform=ax.transAxes,
                     va="top", fontsize=8, color="red")
-        if r["status"] == "unstable":
-            ax.set_title("configurazione probabilmente instabile / nessuno stato stazionario", fontsize=8, color="red")
+        if r["status"] != "stable":
+            nBad, n = int(a["unstableReplicas"].sum()), len(a["unstableReplicas"])
+            ax.set_title(f"configurazione {a['label']}: {nBad}/{n} repliche instabili (pUnstable={a['pUnstable']:.2f})",
+                         fontsize=8, color="red")
         fig.suptitle(_titleText(runId, seed, overrides, f"Metodo di Welch: {label}"), fontsize=9)
         fig.tight_layout(rect=(0, 0, 1, 0.9))
         fig.savefig(plotsDir / f"{runId}_welch_{key}.png", dpi=120)
