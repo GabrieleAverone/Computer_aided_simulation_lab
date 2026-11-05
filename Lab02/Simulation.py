@@ -13,9 +13,7 @@ from Events import Event
 from FutureEventSet import FutureEventSet
 from Metrics import Metrics
 from WarmupDetector import WarmupDetector
-import Analysis
 import Output
-from Analysis import meanAndCI
 from helpers import (
     ARRIVAL_RATE,
     TIME_STEP_MIN,
@@ -119,8 +117,6 @@ class Simulation:
 
     Ogni run() lancia nReplications repliche indipendenti e salva in outDir:
         - results.csv: UNA riga per replica, per tutte le run (viene sempre aggiunto in fondo)
-        - plots/<parametri>/<runId>_welch_<metrica>.png: metodo di Welch, uno per metrica (con welch=True)
-          (<parametri> = i parametri passati a run(), es. nTaxi=6_reachProb=0.3; "base" se non ce ne sono)
         - logs/<runId>.txt: log della prima replica (solo con log=True)
 
     Seed: se seed=None (default) a ogni chiamata viene estratto un seed nuovo, quindi due
@@ -151,31 +147,18 @@ class Simulation:
         self.taxiStands: TaxiStands
         self.FES: FutureEventSet
         self.logFile: TextIO | None = None
-        self.plotsDir: Path = self.outDir / "plots"     # cartella dei grafici della run in corso
 
 
     # ============================== API PUBBLICA ==============================
 
     def run(self, nReplications: int = 10, seed: int | None = None, verbose: bool = True,
-            welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (1, 2, 5, 10, 20),
-            returnSeries: bool = False, trendRelTol: float | None = None, trendAbsTol: float | None = None,
-            plotFolders: bool = True, **overrides) -> dict:
+            returnSeries: bool = False, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
         (solo per questa run) e salva i risultati. Restituisce un dizionario con
-        runId, seed, params, replicas (report globali), standReports, mean, ci, welch.
+        runId, seed, params, replicas (report globali), standReports, mean.
 
-        Analisi di stabilità (non cambia i risultati in results.csv, tranne la colonna `stable`):
-          welch                 : grafici di Welch + controllo di stabilità a blocchi per replica
-                                  (colonne `stable` per replica e `pUnstable` per configurazione in results.csv)
-          welchDelta, welchWs   : ampiezza degli intervalli (passi) e semi-ampiezze w delle medie mobili
-          trendRelTol, trendAbsTol : soglie del controllo (None = default di Welch.blockCheckRow: 0.25, 2.0 clienti).
-                                  La 2a metà della run è divisa in 4 blocchi: una replica è instabile se, per almeno una
-                                  coda (in loco / online), le medie dei blocchi crescono sempre e l'aumento
-                                  (ultimo - primo) supera max(trendRelTol * livello medio, trendAbsTol)
-          returnSeries          : True = nel risultato anche `stateSeries` (serie a tratti costanti di ogni replica,
-                                  per i grafici del warm-up detector)
-          plotFolders           : True = i grafici di ogni run vanno in plots/<parametri>/ (es. plots/nTaxi=6_reachProb=0.3/);
-                                  False = tutti insieme in plots/
+          returnSeries : True = nel risultato anche `stateSeries` (serie a tratti costanti di ogni replica,
+                         per i grafici del warm-up detector)
         """
         self.p = replace(self.baseParams, **overrides)      # TypeError se un nome non esiste
         self.p.validate()
@@ -185,7 +168,6 @@ class Simulation:
         runId = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"    # data + suffisso casuale: unico
 
         self.outDir.mkdir(parents=True, exist_ok=True)
-        self.plotsDir = Output.makePlotsDir(self.outDir, overrides, plotFolders)
         logPath = self.outDir / "logs" / f"{runId}.txt" if self.log else None
 
         globalReports, standReports, stateSeries, warmupMeans, warmupEnds, warmupEndTimes = [], [], [], [], [], []
@@ -198,37 +180,21 @@ class Simulation:
             warmupEnds.append(self.warmupDetector.detectionTime)   # None = non rilevata
             warmupStarts.append(self.metrics.warmup)               # inizio effettivo della finestra di misura
             warmupEndTimes.append(self.warmupDetector.windowEndTimes)
-            if welch or returnSeries:
+            if returnSeries:
                 stateSeries.append(self.metrics.stateSeries())
 
-        thresholds = {"relTol": trendRelTol, "absTol": trendAbsTol}
-        thresholds = {k: v for k, v in thresholds.items() if v is not None}
-        welchResult = (Analysis.analyzeStability(stateSeries, self.p.maxTime, welchDelta, welchWs, **thresholds)
-                       if welch else None)
+        Output.saveResults(self.outDir, self.p, runId, seedSeq.entropy, globalReports, warmupStarts) # type: ignore
 
-        # per results.csv (vuoto senza welch): `stable` per replica, `pUnstable` per configurazione
-        stable = None if welchResult is None else [not bool(u) for u in welchResult["unstableReplicas"]]
-        pUnstable = None if welchResult is None else welchResult["pUnstable"]
-        Output.saveResults(self.outDir, self.p, runId, seedSeq.entropy, globalReports, stable, pUnstable, warmupStarts) # type: ignore
-        if welchResult:
-            Output.saveWelchPlots(self.plotsDir, runId, seedSeq.entropy, welchResult, overrides) # type: ignore
-
-        mean, ci = {}, {}
-        for key in globalReports[0]:
-            mean[key], ci[key] = meanAndCI([g[key] for g in globalReports])
+        mean = {key: sum(g[key] for g in globalReports) / nReplications for key in globalReports[0]}
 
         if verbose:
-            print(f"=== Run {runId}: {nReplications} repliche, seed {seedSeq.entropy} (media ± IC95%) ===")
+            print(f"=== Run {runId}: {nReplications} repliche, seed {seedSeq.entropy} (media) ===")
             print(f"    parametri: {asdict(self.p)}")
             for key in mean:
-                print(f"    {key}: {mean[key]:.4f} ± {ci[key]:.4f}")
-            if welchResult:
-                Analysis.printWelch(welchResult)
+                print(f"    {key}: {mean[key]:.4f}")
 
-        return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p), "plotsDir": str(self.plotsDir),
-                "warmupEndTimes": warmupEnds, "warmupStartTimes": warmupStarts, "warmupWindowMeans": warmupMeans, "warmupWindowEndTimes": warmupEndTimes,
-                "stateSeries": stateSeries if returnSeries else None, "replicas": globalReports, "standReports": standReports, "mean": mean, "ci": ci,
-                "welch": None if welchResult is None else {k: v for k, v in welchResult.items() if k != "analysis"}}
+        return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p), "warmupEndTimes": warmupEnds, "warmupStartTimes": warmupStarts, "warmupWindowMeans": warmupMeans, "warmupWindowEndTimes": warmupEndTimes,
+                "stateSeries": stateSeries if returnSeries else None, "replicas": globalReports, "standReports": standReports, "mean": mean}
 
 
 

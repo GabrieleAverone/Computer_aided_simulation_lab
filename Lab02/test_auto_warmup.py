@@ -24,13 +24,13 @@ def test_restart_measurement_discards_everything_before():
     assert m.warmup == 100
     assert m.nUsers == 0 and m.nUserInLoco == 0 and m.waitedInLocoAcc == 0
     assert sum(m.idleTaxiAccPerStand.values()) == 0
-    assert len(m.segEnds) == 1                       # le serie per Welch restano complete
+    assert len(m.segEnds) == 1                       # le serie a tratti restano complete
     m.update(300, stands)                            # 200 unità di tempo con 2 taxi fermi
     assert sum(m.idleTaxiAccPerStand.values()) == 2 * 200
     assert m.globalReport(2, stands)["avgQueueInLoco"] == 0.0
 
 
-STABLE = dict(nTaxi=11, nStand=3, maxTime=50000, welch=False, verbose=False)
+STABLE = dict(nTaxi=11, nStand=3, maxTime=50000, verbose=False)
 
 
 def test_auto_warmup_starts_measuring_when_detector_fires(tmp_path):
