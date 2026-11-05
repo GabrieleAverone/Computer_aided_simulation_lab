@@ -18,7 +18,7 @@ CELL_SIZE_KM = 0.1            # 100 m per cella
 TIME_STEP_MIN = 0.25          # durata di un passo in minuti (es. 0.25 = 15 s)
  
 # --- arrivi ---
-ARRIVAL_RATE = 2 / 5         # λ [clienti/minuto]: in media 1 cliente ogni 5 min
+ARRIVAL_RATE = 1 / 5         # λ [clienti/minuto]: in media 1 cliente ogni 5 min
 # probabilità che in un passo arrivi un cliente (deve essere <= 1)
 ARRIVAL_PROB_PER_STEP = ARRIVAL_RATE * TIME_STEP_MIN
 assert 0 < ARRIVAL_PROB_PER_STEP <= 1, "riduci TIME_STEP_MIN o ARRIVAL_RATE"
