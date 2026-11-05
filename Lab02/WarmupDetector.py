@@ -48,7 +48,7 @@ class WarmupDetector:
         stabile  se  |pendenza| <= c * SE(pendenza)
 
     con SE dai residui della regressione e c il quantile t di Student al 95% (con t+1-2 gradi di libertà),
-    oppure un valore fisso `slopeZ`. Il rumore entra nel criterio: la soglia si adatta da sola.
+    Il rumore entra nel criterio: la soglia si adatta da sola.
     Con "both" devono valere entrambi i test.
 
     La finestra k è "stabile" se lo sono TUTTE le variabili. Il warm-up è finito quando si hanno
@@ -65,7 +65,7 @@ class WarmupDetector:
 
     def __init__(self, windowSize: int, variables: tuple[str, ...] = ("queueInLoco", "queueOnLine", "queueTotal"),
                  t: int = 5, eps: float = 0.05, delta: float = 1.0, confirm: int = 2,
-                 absTol: float | None = None, mode: str = "both", slopeZ: float | None = None) -> None:
+                 absTol: float | None = None, mode: str = "both") -> None:
         if windowSize < 1 or t < 1 or confirm < 1:
             raise ValueError("windowSize, t e confirm devono essere >= 1")
         if eps <= 0 or delta <= 0 or (absTol is not None and absTol <= 0):
@@ -75,10 +75,7 @@ class WarmupDetector:
             raise ValueError(f"mode deve essere uno di {MODES}")
         if mode != "mean" and t < 2:
             raise ValueError("il test sulla pendenza richiede t >= 2")
-        if slopeZ is not None and slopeZ <= 0:
-            raise ValueError("slopeZ deve essere > 0")
         self.mode = mode
-        self.slopeZ = slopeZ
         self.windowSize = windowSize
         self.t = t
         self.eps = eps
@@ -165,7 +162,7 @@ class WarmupDetector:
     def _slopeStable(self, means: list[float], k: int) -> bool:
         slope, se = linearSlope(means[k - self.t:k + 1])
         dof = self.t - 1                                    # (t+1) punti - 2
-        crit = self.slopeZ if self.slopeZ is not None else (_T95[dof - 1] if dof <= len(_T95) else 1.96)
+        crit = _T95[dof - 1] if dof <= len(_T95) else 1.96
         return abs(slope) <= crit * se
 
 

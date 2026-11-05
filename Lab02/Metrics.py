@@ -11,7 +11,7 @@ class Metrics:
         self.lastTime = 0
         self._resetMeasures()
 
-        # --- stato a tratti costante (per il metodo di Welch) ---
+        # --- stato a tratti costante (serie per i grafici del warm-up) ---
         # il k-esimo valore vale nell'intervallo [segEnds[k-1], segEnds[k]) (segEnds[-1] = 0)
         self.segEnds = []
         self.segIdleTaxi = []
@@ -20,7 +20,7 @@ class Metrics:
 
 
     def _resetMeasures(self) -> None:
-        """Azzera contatori e accumulatori (non le serie a tratti per Welch né lastTime)."""
+        """Azzera contatori e accumulatori (non le serie a tratti né lastTime)."""
         # --- contatori ---
         self.nUsers = 0          # clienti generati
         self.nRide = 0           # corse completate (conteggiate all'arrivo a destinazione)
@@ -201,7 +201,7 @@ class Metrics:
 
 
     def stateSeries(self) -> dict:
-        # stato a tratti costante da t=0 (per il metodo di Welch, vedi Welch.py)
+        # stato a tratti costante da t=0
         return {
             "ends": list(self.segEnds),
             "idleTaxi": list(self.segIdleTaxi),
