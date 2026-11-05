@@ -6,12 +6,16 @@ import numpy as np
 
 
 class WarmupDetector:
-    """update(t, value) a ogni tick. stationary: None = in corso, True = rilevata, False = timeout."""
+    """update(t, value) a ogni tick. stationary: None = in corso, True = rilevata, False = timeout.
 
-    def __init__(self, batch=50, k=10, eps=0.05, patience=5, min_t=500, abs_tol=0.5, max_t=50000):
-        self.batch, self.k, self.eps, self.patience = batch, k, eps, patience
-        self.min_t, self.abs_tol, self.max_t = min_t, abs_tol, max_t
-        self.means = deque(maxlen=2 * k)    # ultimi 2k batch means
+    Medie di batch di `batch` tick; si tengono le ultime `window` medie. Se la media non sta
+    crescendo (2a metà della finestra non più alta della 1a di più di z errori standard)
+    per `patience` batch di fila, la warm-up è finita."""
+
+    def __init__(self, batch=50, window=20, z=2.0, patience=5, min_t=500, max_t=50000):
+        self.batch, self.window, self.z, self.patience = batch, window, z, patience
+        self.min_t, self.max_t = min_t, max_t
+        self.means = deque(maxlen=window)
         self.acc, self.n, self.streak = 0.0, 0, 0
         self.warmup_end = None
         self.stationary = None
@@ -30,15 +34,14 @@ class WarmupDetector:
         self.means.append(self.acc / self.n)
         self.acc, self.n = 0.0, 0
 
-        if len(self.means) == 2 * self.k and t >= self.min_t:
-            m = np.array(self.means)
-            meanA, meanB = m[:self.k].mean(), m[self.k:].mean()
-            scale = max(abs(meanA), self.abs_tol)
-            slope = np.polyfit(np.arange(2 * self.k), m, 1)[0]
-            ok = abs(meanB - meanA) / scale < self.eps and abs(slope * 2 * self.k) / scale < self.eps
-            self.streak = self.streak + 1 if ok else 0
+        if len(self.means) == self.window and t >= self.min_t:
+            h = self.window // 2
+            first, second = np.array(self.means)[:h], np.array(self.means)[h:]
+            se = np.sqrt((first.var(ddof=1) + second.var(ddof=1)) / h)
+            growing = second.mean() - first.mean() > self.z * se
+            self.streak = 0 if growing else self.streak + 1
             if self.streak >= self.patience:
-                self.warmup_end = t - 2 * self.k * self.batch    # inizio finestra A (conservativo)
+                self.warmup_end = t - self.window * self.batch    # inizio della finestra (conservativo)
                 self.stationary = True
         return self.stationary is True
 
