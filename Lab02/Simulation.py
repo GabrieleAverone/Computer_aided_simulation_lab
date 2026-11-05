@@ -65,6 +65,7 @@ class Parameters:
     warmupT: int = 5                    # warm-up detector: finestre precedenti di riferimento
     warmupEps: float = 0.05             # warm-up detector: tolleranza relativa sulla differenza delle medie
     warmupDelta: float = 1.0            # warm-up detector: soglia minima del denominatore (evita /0)
+    warmupAbsTol: float | None = None   # warm-up detector: se impostata, tolleranza ASSOLUTA in clienti (al posto di eps/delta)
     warmupConfirm: int = 2              # warm-up detector: finestre stabili consecutive per segnalare la fine
 
     def capacityList(self) -> list[int]:
@@ -92,8 +93,8 @@ class Parameters:
             raise ValueError("serve 0 <= warmupTime < maxTime")
         if self.warmupWindow < 1 or self.warmupT < 1 or self.warmupConfirm < 1:
             raise ValueError("warmupWindow, warmupT e warmupConfirm devono essere >= 1")
-        if self.warmupEps <= 0 or self.warmupDelta <= 0:
-            raise ValueError("warmupEps e warmupDelta devono essere > 0")
+        if self.warmupEps <= 0 or self.warmupDelta <= 0 or (self.warmupAbsTol is not None and self.warmupAbsTol <= 0):
+            raise ValueError("warmupEps, warmupDelta e warmupAbsTol devono essere > 0")
 
 
 # =============================== SIMULATION ===============================
@@ -477,7 +478,8 @@ class Simulation:
 
         self.metrics = Metrics(standsCoord, self.p.warmupTime, self.p.maxTime)
         self.warmupDetector = WarmupDetector(self.p.warmupWindow, t=self.p.warmupT, eps=self.p.warmupEps,
-                                              delta=self.p.warmupDelta, confirm=self.p.warmupConfirm)
+                                              delta=self.p.warmupDelta, confirm=self.p.warmupConfirm,
+                                              absTol=self.p.warmupAbsTol)
 
         self.FES = FutureEventSet()
         self.FES.insertEvent(self.createSpawnEvent(0))
