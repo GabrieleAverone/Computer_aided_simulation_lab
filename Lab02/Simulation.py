@@ -209,7 +209,7 @@ class Simulation:
         # per results.csv (vuoto senza welch): `stable` per replica, `pUnstable` per configurazione
         stable = None if welchResult is None else [not bool(u) for u in welchResult["unstableReplicas"]]
         pUnstable = None if welchResult is None else welchResult["pUnstable"]
-        Output.saveResults(self.outDir, self.p, runId, seedSeq.entropy, globalReports, stable, pUnstable) # type: ignore
+        Output.saveResults(self.outDir, self.p, runId, seedSeq.entropy, globalReports, stable, pUnstable, warmupStarts) # type: ignore
         if welchResult:
             Output.saveWelchPlots(self.plotsDir, runId, seedSeq.entropy, welchResult, overrides) # type: ignore
 

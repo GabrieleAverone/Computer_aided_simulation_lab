@@ -18,22 +18,24 @@ if TYPE_CHECKING:               # solo per le annotazioni (evita l'import circol
 
 
 def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalReports: list[dict],
-                stable: list[bool] | None = None, pUnstable: float | None = None) -> None:
+                stable: list[bool] | None = None, pUnstable: float | None = None,
+                warmupEnd: list[int] | None = None) -> None:
     """Aggiunge a results.csv una riga per replica (un solo file per tutte le run).
-    `stable`: esito per replica; `pUnstable`: frazione di repliche instabili della configurazione."""
+    `stable`: esito per replica; `pUnstable`: frazione di repliche instabili della configurazione;
+    `warmupEnd`: tempo di simulazione in cui finisce il warm-up (inizio della finestra di misura) per replica."""
     params = asdict(p)
     params["capacity"] = "-".join(str(c) for c in p.capacityList())
-    columns = ["runId", "replica", "seed"] + list(params) + list(globalReports[0]) + ["stable", "pUnstable"]
+    columns = ["runId", "replica", "seed"] + list(params) + list(globalReports[0]) + ["stable", "pUnstable", "warmupEnd"]
 
     path = outDir / "results.csv"
     if path.exists() and path.stat().st_size > 0:
         with open(path, newline="") as f:
             oldColumns = next(csv.reader(f))
         if oldColumns != columns:
-            # file vecchio: si completa solo se mancano parametri nuovi (valore di default) o `stable` (vuoto)
+            # file vecchio: si completa solo se mancano parametri nuovi (valore di default) o `stable`, `pUnstable`, `warmupEnd` (vuoti)
             defaults = {k: str(v) for k, v in asdict(type(p)()).items()}
             missing = [c for c in columns if c not in oldColumns]
-            if [c for c in oldColumns if c not in columns] or any(c not in defaults and c not in ("stable", "pUnstable") for c in missing):
+            if [c for c in oldColumns if c not in columns] or any(c not in defaults and c not in ("stable", "pUnstable", "warmupEnd") for c in missing):
                 raise ValueError(f"{path} ha colonne diverse da quelle attuali: "
                                  "cambia outDir o rinomina il vecchio file")
             with open(path, newline="") as f:
@@ -52,7 +54,8 @@ def saveResults(outDir: Path, p: "Parameters", runId: str, seed: int, globalRepo
         for i, g in enumerate(globalReports):
             writer.writerow({"runId": runId, "replica": i, "seed": seed, **params, **g,
                              "stable": "" if stable is None else stable[i],
-                             "pUnstable": "" if pUnstable is None else pUnstable})
+                             "pUnstable": "" if pUnstable is None else pUnstable,
+                             "warmupEnd": "" if warmupEnd is None else warmupEnd[i]})
 
 
 def makePlotsDir(outDir: Path, overrides: dict, perRun: bool) -> Path:

@@ -62,5 +62,31 @@ def test_detection_is_the_same_with_or_without_auto_warmup(tmp_path):
     assert on["warmupEndTimes"] == off["warmupEndTimes"]      # il detector non dipende dalle metriche
 
 
+def test_results_csv_has_warmup_end_column(tmp_path):
+    import csv
+    r = Simulation(outDir=str(tmp_path)).run(nReplications=3, seed=1, **STABLE)
+    with open(tmp_path / "results.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [int(row["warmupEnd"]) for row in rows] == r["warmupStartTimes"]
+
+
+def test_old_results_csv_without_warmup_end_is_completed(tmp_path):
+    import csv
+    sim = Simulation(outDir=str(tmp_path))
+    sim.run(nReplications=2, seed=1, **STABLE)
+    path = tmp_path / "results.csv"
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    cols = [c for c in rows[0] if c != "warmupEnd"]          # simula un file di una versione precedente
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    sim.run(nReplications=2, seed=2, **STABLE)
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [r["warmupEnd"] == "" for r in rows] == [True, True, False, False]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
