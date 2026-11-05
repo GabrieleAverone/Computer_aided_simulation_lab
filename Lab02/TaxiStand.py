@@ -114,30 +114,27 @@ class TaxiStands():
         self.incomingTaxi: dict[tuple[int, int], int] = {loc: 0 for loc in standsLocations}
 
 
-    def distributeTaxi(self, nTaxi: int, policy: str) -> None:
+    def distributeTaxi(self, nTaxi: int) -> None:
 
         self.totalIdleTaxi = nTaxi
         if nTaxi > self.totalCapacity:
             raise ValueError("# of taxi > Total capacity")
 
-        if policy == "uniform":
-            remaining = nTaxi
-            taxiPerStand = nTaxi // self.nStands
+        remaining = nTaxi
+        taxiPerStand = nTaxi // self.nStands
 
+        for location in self.standsLocations:
+            nAssigned = min(taxiPerStand, self.stands[location].getCapacity())
+            self.stands[location].assignTaxis(nAssigned)
+            remaining -= nAssigned
+
+        while remaining > 0:
             for location in self.standsLocations:
-                nAssigned = min(taxiPerStand, self.stands[location].getCapacity())
-                self.stands[location].assignTaxis(nAssigned)
-                remaining -= nAssigned
-
-            while remaining > 0:
-                for location in self.standsLocations:
-                    if remaining == 0:
-                        break
-                    if self.stands[location].hasFreeSpot():
-                        self.stands[location].assignTaxis(1)
-                        remaining -= 1
-
-        else: raise ValueError("Policy non recognised")
+                if remaining == 0:
+                    break
+                if self.stands[location].hasFreeSpot():
+                    self.stands[location].assignTaxis(1)
+                    remaining -= 1
 
 
     # ---------------------------- stand search ----------------------------
@@ -312,7 +309,3 @@ class TaxiStands():
     
     def getTotalInLoco(self) -> int:
         return self.totalInLoco
-
-
-    def __str__(self):
-        return f"TaxiStands: {self.stands.values()}\nOnlineQueue: {self.onlineQueue}"

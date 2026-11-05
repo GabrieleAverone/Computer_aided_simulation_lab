@@ -3,8 +3,6 @@ _T95 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
         2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
         2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042]
 
-MODES = ("mean", "slope", "both")
-
 
 def linearSlope(y: list[float]) -> tuple[float, float]:
     """Regressione lineare di y contro 0, 1, ..., n-1 (n >= 3).
@@ -31,25 +29,20 @@ class WarmupDetector:
     con la finestra k-1. Si tiene una media per ciascuna variabile monitorata.
 
     Fine del warm-up: dalla finestra k (con almeno t finestre precedenti) si applicano, per ogni variabile,
-    uno o due test (parametro `mode`):
+    due test, che devono valere entrambi:
 
-    TEST SULLA MEDIA (mode "mean" o "both"):
+    TEST SULLA MEDIA:
 
         ref_k = media di m_{k-t}, ..., m_{k-1}
-        stabile  se  |m_k - ref_k| / max(ref_k, delta) < eps          (tolleranza relativa)
+        stabile  se  |m_k - ref_k| / max(ref_k, delta) < eps
 
-    oppure, se si passa absTol, con tolleranza ASSOLUTA (in clienti, eps e delta si ignorano):
-
-        stabile  se  |m_k - ref_k| < absTol
-
-    TEST SULLA PENDENZA (mode "slope" o "both"): regressione lineare delle t+1 medie m_{k-t}, ..., m_k
-    contro il numero di finestra; la pendenza non deve essere distinguibile da zero:
+    TEST SULLA PENDENZA: regressione lineare delle t+1 medie m_{k-t}, ..., m_k contro il numero di finestra;
+    la pendenza non deve essere distinguibile da zero:
 
         stabile  se  |pendenza| <= c * SE(pendenza)
 
-    con SE dai residui della regressione e c il quantile t di Student al 95% (con t+1-2 gradi di libertà),
+    con SE dai residui della regressione e c il quantile t di Student al 95% (con t+1-2 gradi di libertà).
     Il rumore entra nel criterio: la soglia si adatta da sola.
-    Con "both" devono valere entrambi i test.
 
     La finestra k è "stabile" se lo sono TUTTE le variabili. Il warm-up è finito quando si hanno
     `confirm` finestre stabili consecutive: il detector lo segnala (warmupDone, detectionTime,
@@ -64,18 +57,13 @@ class WarmupDetector:
     """
 
     def __init__(self, windowSize: int, variables: tuple[str, ...] = ("queueInLoco", "queueOnLine", "queueTotal"),
-                 t: int = 5, eps: float = 0.05, delta: float = 1.0, confirm: int = 2,
-                 absTol: float | None = None, mode: str = "both") -> None:
+                 t: int = 5, eps: float = 0.05, delta: float = 1.0, confirm: int = 2) -> None:
         if windowSize < 1 or t < 1 or confirm < 1:
             raise ValueError("windowSize, t e confirm devono essere >= 1")
-        if eps <= 0 or delta <= 0 or (absTol is not None and absTol <= 0):
-            raise ValueError("eps, delta e absTol devono essere > 0")
-        self.absTol = absTol
-        if mode not in MODES:
-            raise ValueError(f"mode deve essere uno di {MODES}")
-        if mode != "mean" and t < 2:
+        if eps <= 0 or delta <= 0:
+            raise ValueError("eps e delta devono essere > 0")
+        if t < 2:
             raise ValueError("il test sulla pendenza richiede t >= 2")
-        self.mode = mode
         self.windowSize = windowSize
         self.t = t
         self.eps = eps
@@ -144,9 +132,7 @@ class WarmupDetector:
             return False
         for v in self.variables:
             means = self.windowMeans[v]
-            if self.mode in ("mean", "both") and not self._meanStable(means, k):
-                return False
-            if self.mode in ("slope", "both") and not self._slopeStable(means, k):
+            if not (self._meanStable(means, k) and self._slopeStable(means, k)):
                 return False
         return True
 
@@ -154,8 +140,6 @@ class WarmupDetector:
     def _meanStable(self, means: list[float], k: int) -> bool:
         ref = sum(means[k - self.t:k]) / self.t
         diff = abs(means[k] - ref)
-        if self.absTol is not None:
-            return diff < self.absTol
         return diff / max(ref, self.delta) < self.eps
 
 
