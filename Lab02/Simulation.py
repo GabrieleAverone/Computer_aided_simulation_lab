@@ -60,7 +60,9 @@ class Parameters:
 
     # durata
     maxTime: int = 50000
-    warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche
+    warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche (con autoWarmup: warm-up minimo)
+    autoWarmup: bool = True             # quando il detector segnala la fine del warm-up (dopo warmupTime), le metriche ripartono da lì;
+                                        # se non segnala nulla vale warmupTime. False = sempre warmupTime fisso
     warmupWindow: int = 500             # warm-up detector: eventi per finestra
     warmupT: int = 5                    # warm-up detector: finestre precedenti di riferimento
     warmupEps: float = 0.5              # warm-up detector: tolleranza relativa sulla differenza delle medie
@@ -187,12 +189,14 @@ class Simulation:
         logPath = self.outDir / "logs" / f"{runId}.txt" if self.log else None
 
         globalReports, standReports, stateSeries, warmupMeans, warmupEnds, warmupEndTimes = [], [], [], [], [], []
+        warmupStarts = []
         for i, replicaSeed in enumerate(replicaSeeds):
             g, s = self.runReplica(replicaSeed, logPath if i == 0 else None)
             globalReports.append(g)
             standReports.append(s)
             warmupMeans.append(self.warmupDetector.windowMeans)
             warmupEnds.append(self.warmupDetector.detectionTime)   # None = non rilevata
+            warmupStarts.append(self.metrics.warmup)               # inizio effettivo della finestra di misura
             warmupEndTimes.append(self.warmupDetector.windowEndTimes)
             if welch or returnSeries:
                 stateSeries.append(self.metrics.stateSeries())
@@ -222,7 +226,7 @@ class Simulation:
                 Analysis.printWelch(welchResult)
 
         return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p), "plotsDir": str(self.plotsDir),
-                "warmupEndTimes": warmupEnds, "warmupWindowMeans": warmupMeans, "warmupWindowEndTimes": warmupEndTimes,
+                "warmupEndTimes": warmupEnds, "warmupStartTimes": warmupStarts, "warmupWindowMeans": warmupMeans, "warmupWindowEndTimes": warmupEndTimes,
                 "stateSeries": stateSeries if returnSeries else None, "replicas": globalReports, "standReports": standReports, "mean": mean, "ci": ci,
                 "welch": None if welchResult is None else {k: v for k, v in welchResult.items() if k != "analysis"}}
 
@@ -522,6 +526,9 @@ class Simulation:
                     if self.warmupDetector.warmupDone and not wasDone:
                         self.writeLog(f"Warm-up detector: END OF WARM-UP signalled at time {time} "
                                       f"(window {self.warmupDetector.detectionWindow})")
+                        if self.p.autoWarmup and self.metrics.warmup < time < self.p.maxTime:
+                            self.metrics.restartMeasurement(time)
+                            self.writeLog(f"Metrics restarted at time {time}")
 
                 handler = self.handlers.get(currentEvent.getType())
                 if handler is None:
