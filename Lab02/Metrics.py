@@ -41,11 +41,8 @@ class Metrics:
         self.onLineQueueAcc = 0
         self.idleTaxiAccPerStand = {pos: 0 for pos in self.standPositions}
         self.queueAccPerStand = {pos: 0 for pos in self.standPositions}
-        self.maxQueuePerStand = {pos: 0 for pos in self.standPositions}
 
         # --- clienti in loco per stand ---
-        self.nUserInLocoPerStand = {pos: 0 for pos in self.standPositions}
-        self.waitedInLocoAccPerStand = {pos: 0 for pos in self.standPositions}
 
 
     def restartMeasurement(self, time: int) -> None:
@@ -76,8 +73,6 @@ class Metrics:
             self.queueAccPerStand[pos] += qLen * dt
             totIdle += stand.nTaxi
             totQueue += qLen
-            if dt > 0 and qLen > self.maxQueuePerStand[pos]:
-                self.maxQueuePerStand[pos] = qLen
 
         self.onLineQueueAcc += len(taxiStands.onlineQueue) * dt
 
@@ -116,14 +111,12 @@ class Metrics:
             self.nRedistributions += 1
 
 
-    def recordInLocoWait(self, standLocation: tuple[int, int], waitedTime: int, time: int) -> None:
+    def recordInLocoWait(self, waitedTime: int, time: int) -> None:
         # quando un cliente in loco parte dallo stand
         if not self._inWindow(time):
             return
         self.nUserInLoco += 1
         self.waitedInLocoAcc += waitedTime
-        self.nUserInLocoPerStand[standLocation] += 1
-        self.waitedInLocoAccPerStand[standLocation] += waitedTime
 
 
     def recordOnLineWait(self, waitedTime: int, time: int) -> None:
@@ -158,7 +151,7 @@ class Metrics:
     # ------------------------------------------------------------------
     # Risultati finali
     # ------------------------------------------------------------------
-    def globalReport(self, nTaxi: int, taxiStands=None) -> dict:
+    def globalReport(self, nTaxi: int) -> dict:
         endTime = self.endTime - self.warmup      # durata della finestra di misura
         idleAcc = sum(self.idleTaxiAccPerStand.values())
         totalTaxiTime = endTime * nTaxi
@@ -178,26 +171,7 @@ class Metrics:
             "fracBackToStand": self.timeBackToStandAcc / totalTaxiTime,
             "fracRebalance": self.timeRebalanceAcc / totalTaxiTime,
             "fracIdle": idleAcc / totalTaxiTime,
-            # clienti ancora in attesa a fine simulazione (le loro attese NON sono
-            # nelle medie: il loro numero dice quanto è forte il bias di troncamento)
-            "nStillWaitingInLoco": taxiStands.getTotalInLoco() if taxiStands else 0,
-            "nStillWaitingOnLine": taxiStands.getTotalOnline() if taxiStands else 0,
         }
-
-
-    def standReport(self) -> dict:
-        endTime = self.endTime - self.warmup
-        report = {}
-        for pos in self.standPositions:
-            n = self.nUserInLocoPerStand[pos]
-            report[pos] = {
-                "avgIdleTaxi": self.idleTaxiAccPerStand[pos] / endTime,
-                "avgQueue": self.queueAccPerStand[pos] / endTime,
-                "maxQueue": self.maxQueuePerStand[pos],
-                "nUserInLoco": n,
-                "avgWaitInLoco": self.waitedInLocoAccPerStand[pos] / n if n > 0 else 0.0,
-            }
-        return report
 
 
     def stateSeries(self) -> dict:

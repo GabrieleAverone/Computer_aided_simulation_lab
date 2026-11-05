@@ -58,11 +58,6 @@ class User:
             raise ValueError("The field callTaxiTime is not defined")
 
 
-    def describe(self) -> str:
-        """Full description of the user, used in the log."""
-        return (f"User {self.counter} -- spawnTime: {self.spawnTime} -- spawnLocation: {self.spawnLocation} "
-                f"-- destination: {self.destination} -- inLoco: {self.inLocoFlag}")
-
     def __str__(self):
         return f"{self.counter}"
 

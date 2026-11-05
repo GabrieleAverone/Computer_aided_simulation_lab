@@ -2,7 +2,6 @@ import math
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
 from uuid import uuid4
 
 import numpy as np
@@ -27,7 +26,7 @@ from helpers import (
 )
 
 
-LOG_SEPARATOR_LENGTH = 60
+MAX_PLACEMENT_ATTEMPTS = 10_000     # tentativi massimi per piazzare gli stand
 
 
 # ============================== PARAMETERS ==============================
@@ -39,9 +38,7 @@ class Parameters:
     # taxi e stand
     nStand: int = 2
     nTaxi: int = 6
-    capacity: int | list[int] | None = None     # posti per stand: un intero, una lista, o None = automatico
-    capacitySlack: int = 0              # con capacity=None: posti extra per stand oltre ceil(nTaxi / nStand)
-    policy: str = "uniform"
+    capacitySlack: int = 0              # posti extra per stand oltre ceil(nTaxi / nStand)
     redistribution: bool = True         # dopo una corsa il taxi va verso lo stand con clienti in coda
     rebalance: bool = True              # un cliente in coda richiama un taxi fermo da un altro stand
     rebalanceReserve: int = 1           # uno stand cede un taxi solo se ne ha più di questi fermi
@@ -54,7 +51,6 @@ class Parameters:
 
     # posizionamento degli stand
     minStandDistance: int = 40          # distanza minima (Manhattan) tra due stand
-    maxPlacementAttempts: int = 10_000
 
     # durata
     maxTime: int = 50000
@@ -65,41 +61,26 @@ class Parameters:
     warmupT: int = 5                    # warm-up detector: finestre precedenti di riferimento
     warmupEps: float = 0.5              # warm-up detector: tolleranza relativa sulla differenza delle medie
     warmupDelta: float = 1.0            # warm-up detector: soglia minima del denominatore (evita /0)
-    warmupAbsTol: float | None = None   # warm-up detector: se impostata, tolleranza ASSOLUTA in clienti (al posto di eps/delta)
-    warmupMode: str = "both"            # warm-up detector: "mean" (confronto con la media), "slope" (pendenza) o "both" (entrambi)
     warmupConfirm: int = 2              # warm-up detector: finestre stabili consecutive per segnalare la fine
 
     def capacityList(self) -> list[int]:
-        if self.capacity is None:
-            # automatico: i posti minimi per far stare tutti i taxi, più il margine capacitySlack
-            return [math.ceil(self.nTaxi / self.nStand) + self.capacitySlack] * self.nStand
-        if isinstance(self.capacity, int):
-            return [self.capacity] * self.nStand
-        return list(self.capacity)
+        # i posti minimi per far stare tutti i taxi, più il margine capacitySlack
+        return [math.ceil(self.nTaxi / self.nStand) + self.capacitySlack] * self.nStand
 
     def arrivalProb(self) -> float:
         return self.arrivalRate * TIME_STEP_MIN
 
     def validate(self) -> None:
-        if self.capacity is not None and self.capacitySlack != 0:
-            raise ValueError("capacitySlack si usa solo con capacity=None (capacity automatica)")
-        if len(self.capacityList()) != self.nStand:
-            raise ValueError("capacity deve avere un valore per ogni stand (o essere un intero)")
-        if self.nTaxi > sum(self.capacityList()):
-            raise ValueError(f"nTaxi ({self.nTaxi}) è maggiore della capienza totale degli stand "
-                             f"({sum(self.capacityList())}): aumenta capacity")
         if not 0 < self.arrivalProb() <= 1:
             raise ValueError("arrivalRate * TIME_STEP_MIN deve essere in (0, 1]")
         if not 0 <= self.warmupTime < self.maxTime:
             raise ValueError("serve 0 <= warmupTime < maxTime")
         if self.warmupWindow < 1 or self.warmupT < 1 or self.warmupConfirm < 1:
             raise ValueError("warmupWindow, warmupT e warmupConfirm devono essere >= 1")
-        if self.warmupMode not in ("mean", "slope", "both"):
-            raise ValueError("warmupMode deve essere 'mean', 'slope' o 'both'")
-        if self.warmupMode != "mean" and self.warmupT < 2:
-            raise ValueError("con il test sulla pendenza warmupT deve essere >= 2")
-        if self.warmupEps <= 0 or self.warmupDelta <= 0 or (self.warmupAbsTol is not None and self.warmupAbsTol <= 0):
-            raise ValueError("warmupEps, warmupDelta e warmupAbsTol devono essere > 0")
+        if self.warmupT < 2:
+            raise ValueError("il test sulla pendenza richiede warmupT >= 2")
+        if self.warmupEps <= 0 or self.warmupDelta <= 0:
+            raise ValueError("warmupEps e warmupDelta devono essere > 0")
 
 
 # =============================== SIMULATION ===============================
@@ -114,7 +95,6 @@ class Simulation:
 
     Ogni run() lancia nReplications repliche indipendenti e salva in outDir:
         - results.csv: UNA riga per replica, per tutte le run (viene sempre aggiunto in fondo)
-        - logs/<runId>.txt: log della prima replica (solo con log=True)
 
     Seed: se seed=None (default) a ogni chiamata viene estratto un seed nuovo, quindi due
     chiamate di fila danno risultati diversi. Il seed usato è scritto nel CSV e restituito:
@@ -123,9 +103,8 @@ class Simulation:
     stessi numeri casuali.
     """
 
-    def __init__(self, outDir: str = "results", log: bool = False, **params) -> None:
+    def __init__(self, outDir: str = "results", **params) -> None:
         self.outDir = Path(outDir)
-        self.log = log
         self.baseParams = Parameters(**params)
         self.baseParams.validate()
 
@@ -143,7 +122,6 @@ class Simulation:
         self.warmupDetector: WarmupDetector
         self.taxiStands: TaxiStands
         self.FES: FutureEventSet
-        self.logFile: TextIO | None = None
 
 
     # ============================== API PUBBLICA ==============================
@@ -152,7 +130,7 @@ class Simulation:
             returnSeries: bool = False, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
         (solo per questa run) e salva i risultati. Restituisce un dizionario con
-        runId, seed, params, replicas (report globali), standReports, mean.
+        runId, seed, params, replicas (report globali), mean.
 
           returnSeries : True = nel risultato anche `stateSeries` (serie a tratti costanti di ogni replica,
                          per i grafici del warm-up detector)
@@ -165,14 +143,11 @@ class Simulation:
         runId = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"    # data + suffisso casuale: unico
 
         self.outDir.mkdir(parents=True, exist_ok=True)
-        logPath = self.outDir / "logs" / f"{runId}.txt" if self.log else None
 
-        globalReports, standReports, stateSeries, warmupMeans, warmupEnds, warmupEndTimes = [], [], [], [], [], []
+        globalReports, stateSeries, warmupMeans, warmupEnds, warmupEndTimes = [], [], [], [], []
         warmupStarts = []
-        for i, replicaSeed in enumerate(replicaSeeds):
-            g, s = self.runReplica(replicaSeed, logPath if i == 0 else None)
-            globalReports.append(g)
-            standReports.append(s)
+        for replicaSeed in replicaSeeds:
+            globalReports.append(self.runReplica(replicaSeed))
             warmupMeans.append(self.warmupDetector.windowMeans)
             warmupEnds.append(self.warmupDetector.detectionTime)   # None = non rilevata
             warmupStarts.append(self.metrics.warmup)               # inizio effettivo della finestra di misura
@@ -191,36 +166,8 @@ class Simulation:
                 print(f"    {key}: {mean[key]:.4f}")
 
         return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p), "warmupEndTimes": warmupEnds, "warmupStartTimes": warmupStarts, "warmupWindowMeans": warmupMeans, "warmupWindowEndTimes": warmupEndTimes,
-                "stateSeries": stateSeries if returnSeries else None, "replicas": globalReports, "standReports": standReports, "mean": mean}
+                "stateSeries": stateSeries if returnSeries else None, "replicas": globalReports, "mean": mean}
 
-
-
-    # ================================ LOGGING ================================
-
-    def writeLog(self, message: str = "") -> None:
-        """Scrive una riga nel file di log (solo se il log della replica è attivo)."""
-        if self.logFile is not None:
-            self.logFile.write(message + "\n")
-
-
-    def logState(self, iteration: int, time: int, currentEvent: Event) -> None:
-        """Scrive lo stato della simulazione all'inizio di ogni iterazione."""
-        self.writeLog()
-        self.writeLog("=" * LOG_SEPARATOR_LENGTH)
-        self.writeLog(f"Iteration: {iteration} -- Time: {time}")
-        self.writeLog("=" * LOG_SEPARATOR_LENGTH)
-        self.writeLog(f"FES:\n{self.FES}")
-        self.writeLog(f"taxiStands:\n{self.taxiStands}")
-        self.writeLog(f"Current event: {currentEvent!r}")
-
-        currentUser = currentEvent.getUser()
-        if currentUser is not None:
-            self.writeLog(f"Current user: {currentUser.describe()}")
-
-
-    def insertAndLogEvent(self, event: Event) -> None:
-        self.FES.insertEvent(event)
-        self.writeLog(f"Event insertion: {event!r}")
 
 
     # ============================== HELPERS ==================================
@@ -245,7 +192,7 @@ class Simulation:
         attempts = 0
         while len(positions) < self.p.nStand:
             attempts += 1
-            if attempts > self.p.maxPlacementAttempts:
+            if attempts > MAX_PLACEMENT_ATTEMPTS:
                 raise RuntimeError(
                     f"Impossibile piazzare {self.p.nStand} stand con distanza minima {self.p.minStandDistance}: "
                     "riduci minStandDistance o nStand")
@@ -262,7 +209,7 @@ class Simulation:
         timeToStand = getTimeByTaxi(fromLocation, standLocation)
         nextEvent = Event("TAXI_ARRIVAL_TO_STAND", time + timeToStand, standLocation, None)
         self.taxiStands.taxiHeadingToStand(standLocation)
-        self.insertAndLogEvent(nextEvent)
+        self.FES.insertEvent(nextEvent)
         if rebalance:
             self.metrics.recordRebalance(time, timeToStand)
         else:
@@ -283,7 +230,7 @@ class Simulation:
 
         # schedule next client spawn event
         newSpawnTime = time + getNewSpawnTime(self.p.arrivalProb())
-        self.insertAndLogEvent(self.createSpawnEvent(newSpawnTime))
+        self.FES.insertEvent(self.createSpawnEvent(newSpawnTime))
 
         # Compute user action
         currentUser = self.getEventUser(currentEvent)
@@ -296,7 +243,7 @@ class Simulation:
             currentUser.setNextLocation(nearestStandLocation)
             currentUser.setArrivalToStandTime(arrivalTime)
             arrivalToStand = Event("USER_ARRIVAL_TO_STAND", arrivalTime, nearestStandLocation, currentUser)
-            self.insertAndLogEvent(arrivalToStand)
+            self.FES.insertEvent(arrivalToStand)
 
         else:
             if self.taxiStands.existsIdleTaxi():
@@ -304,17 +251,15 @@ class Simulation:
                 timeToUser = getTimeByTaxi(standLocation, currentUser.getSpawnLocation())
                 arrivalTime = time + timeToUser
                 self.taxiStands.taxiDeparture(standLocation)
-                self.writeLog(f"Taxi departed from stand {standLocation}")
                 currentUser.setCallTaxiTime(time)
                 self.metrics.incrementTimeToUser(time, timeToUser)
                 currentUser.setNextLocation(currentUser.getSpawnLocation())
                 arrivalToUser = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, currentUser.getSpawnLocation(), currentUser)
-                self.insertAndLogEvent(arrivalToUser)
+                self.FES.insertEvent(arrivalToUser)
 
             else:
                 self.taxiStands.insertOnlineUser(currentUser)
                 currentUser.setCallTaxiTime(time)
-                self.writeLog("User inserted in online queue")
 
 
     def handleUserArrivalToStand(self, time: int, currentEvent: Event) -> None:
@@ -327,15 +272,13 @@ class Simulation:
             arrivalTime = time + timeToDestination
 
             self.taxiStands.taxiDeparture(standLocation)
-            self.writeLog(f"Taxi departed from stand {standLocation}")
             nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
-            self.insertAndLogEvent(nextEvent)
-            self.metrics.recordInLocoWait(standLocation, 0, time)
+            self.FES.insertEvent(nextEvent)
+            self.metrics.recordInLocoWait(0, time)
             self.metrics.incrementRideTimeAcc(time, timeToDestination)
 
         else:
             self.taxiStands.insertInLocoUser(standLocation, currentUser)
-            self.writeLog(f"User inserted in in-loco queue of stand {standLocation}")
 
             # ribilanciamento: solo se la coda non è già coperta da un taxi in arrivo
             if self.p.rebalance and self.taxiStands.unmetDemand(standLocation) > 0:
@@ -347,11 +290,9 @@ class Simulation:
         dallo stand più vicino che ne ha più di rebalanceReserve fermi."""
         donorLocation = self.taxiStands.findDonorStand(standLocation, self.p.rebalanceReserve)
         if donorLocation is None:
-            self.writeLog("Rebalance: no stand can give a taxi")
             return
 
         self.taxiStands.taxiDeparture(donorLocation)
-        self.writeLog(f"Rebalance: taxi sent from stand {donorLocation} to stand {standLocation}")
         self.sendTaxiToStand(time, donorLocation, standLocation, rebalance=True)
 
 
@@ -365,7 +306,7 @@ class Simulation:
 
         nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, currentUser.getDestination(), currentUser)
         self.metrics.incrementRideTimeAcc(time, timeToDestination)
-        self.insertAndLogEvent(nextEvent)
+        self.FES.insertEvent(nextEvent)
 
 
     def handleArrivalToDestination(self, time: int, currentEvent: Event) -> None:
@@ -375,22 +316,19 @@ class Simulation:
 
         if self.p.onlinePriority and self.taxiStands.hasOnlineUser():
             nextUser = self.taxiStands.getOnlineUser()
-            self.writeLog(f"Taxi serves the first user of the online queue: user {nextUser}")
             timeToUser = getTimeByTaxi(currentUser.getDestination(), nextUser.getSpawnLocation())
             arrivalTime = time + timeToUser
 
             nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, nextUser.getSpawnLocation(), nextUser)
-            self.insertAndLogEvent(nextEvent)
+            self.FES.insertEvent(nextEvent)
             self.metrics.incrementTimeToUser(time, timeToUser)
 
         else:
             targetStand = self.taxiStands.findDemandStand(currentEvent.getLocation()) if self.p.redistribution else None
             if targetStand is not None:
-                self.writeLog(f"No user in online queue: taxi goes to stand {targetStand} (users waiting)")
                 self.metrics.incrementRedistribution(time)
             else:
                 targetStand = self.taxiStands.findFreeStand(currentEvent.getLocation())
-                self.writeLog(f"No user in online queue: taxi goes to stand {targetStand}")
             self.sendTaxiToStand(time, currentEvent.getLocation(), targetStand)
 
 
@@ -404,24 +342,22 @@ class Simulation:
             nextUser, inLocoFlag = self.taxiStands.getUser(standLocation)
 
             if inLocoFlag:
-                self.writeLog(f"Taxi at stand {standLocation} picks up in-loco user {nextUser}")
                 destination = nextUser.getDestination()
-                self.metrics.recordInLocoWait(standLocation, time - nextUser.getArrivalToStandTime(), time)
+                self.metrics.recordInLocoWait(time - nextUser.getArrivalToStandTime(), time)
                 timeToDestination = getTimeByTaxi(standLocation, destination)
                 arrivalTime = time + timeToDestination
 
                 nextEvent = Event("ARRIVAL_TO_DESTINATION", arrivalTime, destination, nextUser)
-                self.insertAndLogEvent(nextEvent)
+                self.FES.insertEvent(nextEvent)
                 self.metrics.incrementRideTimeAcc(time, timeToDestination)
 
             else:
-                self.writeLog(f"Taxi at stand {standLocation} goes to online user {nextUser}")
                 destination = nextUser.getSpawnLocation()
                 timeToUser = getTimeByTaxi(standLocation, destination)
                 arrivalTime = time + timeToUser
 
                 nextEvent = Event("TAXI_ARRIVAL_TO_USER", arrivalTime, destination, nextUser)
-                self.insertAndLogEvent(nextEvent)
+                self.FES.insertEvent(nextEvent)
                 self.metrics.incrementTimeToUser(time, timeToUser)
                 
                 if self.p.rebalance and self.taxiStands.unmetDemand(standLocation) > 0:
@@ -429,95 +365,69 @@ class Simulation:
 
         elif self.taxiStands.hasFreeSpot(standLocation):
             self.taxiStands.taxiArrival(standLocation)
-            self.writeLog(f"Taxi parked in stand {standLocation}")
 
         else:
             nextStandLocation = self.taxiStands.findFreeStand(standLocation)
-            self.writeLog(f"Stand {standLocation} is full: taxi redirected to stand {nextStandLocation}")
             self.sendTaxiToStand(time, standLocation, nextStandLocation)
 
 
     # ============================ SINGOLA REPLICA ============================
 
-    def runReplica(self, seed: np.random.SeedSequence, logPath: Path | None = None) -> tuple[dict, dict]:
-        """Esegue una replica e restituisce (report globale, report per stand)."""
+    def runReplica(self, seed: np.random.SeedSequence) -> dict:
+        """Esegue una replica e restituisce il report globale."""
         setSeed(seed)
-        Event._counter = 0      # numerazione di eventi e utenti da 0 in ogni replica (log leggibili)
+        Event._counter = 0      # numerazione di eventi e utenti da 0 in ogni replica
         User._counter = 0
 
         # Simulation Initialization:
         standsCoord = self.placeStands()
 
         self.taxiStands = TaxiStands(self.p.capacityList(), standsCoord)
-        self.taxiStands.distributeTaxi(self.p.nTaxi, policy=self.p.policy)
+        self.taxiStands.distributeTaxi(self.p.nTaxi)
 
         self.metrics = Metrics(standsCoord, self.p.warmupTime, self.p.maxTime)
         self.warmupDetector = WarmupDetector(self.p.warmupWindow, t=self.p.warmupT, eps=self.p.warmupEps,
-                                              delta=self.p.warmupDelta, confirm=self.p.warmupConfirm,
-                                              absTol=self.p.warmupAbsTol, mode=self.p.warmupMode)
+                                              delta=self.p.warmupDelta, confirm=self.p.warmupConfirm)
 
         self.FES = FutureEventSet()
         self.FES.insertEvent(self.createSpawnEvent(0))
 
-        if logPath is not None:
-            logPath.parent.mkdir(parents=True, exist_ok=True)
-            self.logFile = open(logPath, "w")
+        while True:
+            currentEvent = self.FES.getEvent()
+            time = currentEvent.getTime()
 
-        try:
-            iteration = 0
-            while True:
+            if time > self.p.maxTime:
+                self.metrics.update(self.p.maxTime, self.taxiStands)   # chiude l'ultimo intervallo a maxTime
+                break
 
-                currentEvent = self.FES.getEvent()
-                time = currentEvent.getTime()
+            self.metrics.update(time, self.taxiStands)
+            wasDone = self.warmupDetector.warmupDone
+            self.warmupDetector.update(time, {
+                "queueInLoco": self.taxiStands.getTotalInLoco(),
+                "queueOnLine": self.taxiStands.getTotalOnline(),
+                "queueTotal": self.taxiStands.getTotalInLoco() + self.taxiStands.getTotalOnline()})
+            if self.warmupDetector.warmupDone and not wasDone:
+                if self.p.autoWarmup and self.metrics.warmup < time < self.p.maxTime:
+                    self.metrics.restartMeasurement(time)
 
-                if self.logFile is not None:
-                    self.logState(iteration, time, currentEvent)
+            handler = self.handlers.get(currentEvent.getType())
+            if handler is None:
+                raise ValueError(f"Evento non gestito: {currentEvent.getType()}")
 
-                if time > self.p.maxTime:
-                    self.metrics.update(self.p.maxTime, self.taxiStands)   # chiude l'ultimo intervallo a maxTime
-                    self.writeLog(f"Time {time} > maxTime ({self.p.maxTime}): end of the simulation")
-                    break
+            handler(time, currentEvent)
 
-                self.metrics.update(time, self.taxiStands)
-                wasDone = self.warmupDetector.warmupDone
-                if self.warmupDetector.update(time, {
-                        "queueInLoco": self.taxiStands.getTotalInLoco(),
-                        "queueOnLine": self.taxiStands.getTotalOnline(),
-                        "queueTotal": self.taxiStands.getTotalInLoco() + self.taxiStands.getTotalOnline()}):
-                    self.writeLog(f"Warm-up detector, window {self.warmupDetector.nWindows - 1} closed: "
-                                  f"{ {v: m[-1] for v, m in self.warmupDetector.windowMeans.items()} }")
-                    if self.warmupDetector.warmupDone and not wasDone:
-                        self.writeLog(f"Warm-up detector: END OF WARM-UP signalled at time {time} "
-                                      f"(window {self.warmupDetector.detectionWindow})")
-                        if self.p.autoWarmup and self.metrics.warmup < time < self.p.maxTime:
-                            self.metrics.restartMeasurement(time)
-                            self.writeLog(f"Metrics restarted at time {time}")
-
-                handler = self.handlers.get(currentEvent.getType())
-                if handler is None:
-                    raise ValueError(f"Evento non gestito: {currentEvent.getType()}")
-
-                handler(time, currentEvent)
-                iteration += 1
-
-        finally:
-            if self.logFile is not None:
-                self.logFile.close()
-                self.logFile = None
-
-        return self.metrics.globalReport(self.p.nTaxi, self.taxiStands), self.metrics.standReport()
+        return self.metrics.globalReport(self.p.nTaxi)
 
 
 if __name__ == "__main__":
     import itertools
 
-    sim = Simulation(outDir="results", log=True)
+    sim = Simulation(outDir="results")
 
     # una run con i parametri di base
     sim.run(nReplications=10)
 
     # grid search: una run per ogni combinazione (ogni run ha un seed nuovo;
     # passa seed=... a run() per usare gli stessi numeri casuali in tutte)
-    # (capacity non è indicata: viene calcolata da nTaxi e nStand)
     for nTaxi, reachProb in itertools.product([4, 6, 8], [0.3, 0.7]):
         sim.run(nReplications=10, nTaxi=nTaxi, reachProb=reachProb, verbose=False)
