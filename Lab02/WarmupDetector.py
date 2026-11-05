@@ -1,3 +1,23 @@
+# quantile t di Student (bilaterale, 95%) per gradi di libertà 1..30; oltre 30 si usa 1.96
+_T95 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+        2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+        2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042]
+
+MODES = ("mean", "slope", "both")
+
+
+def linearSlope(y: list[float]) -> tuple[float, float]:
+    """Regressione lineare di y contro 0, 1, ..., n-1 (n >= 3).
+    Restituisce (pendenza, errore standard della pendenza)."""
+    n = len(y)
+    xm = (n - 1) / 2
+    ym = sum(y) / n
+    sxx = sum((i - xm) ** 2 for i in range(n))
+    slope = sum((i - xm) * (v - ym) for i, v in enumerate(y)) / sxx
+    sse = sum((v - ym - slope * (i - xm)) ** 2 for i, v in enumerate(y))
+    return slope, (sse / (n - 2) / sxx) ** 0.5
+
+
 class WarmupDetector:
     """
     Detector del warm-up in tempo reale (per ora: solo le statistiche per finestra).
@@ -10,7 +30,10 @@ class WarmupDetector:
     La finestra k è formata da `windowSize` eventi consecutivi, senza sovrapposizione
     con la finestra k-1. Si tiene una media per ciascuna variabile monitorata.
 
-    Fine del warm-up: dalla finestra k (con almeno t finestre precedenti) si calcola, per ogni variabile,
+    Fine del warm-up: dalla finestra k (con almeno t finestre precedenti) si applicano, per ogni variabile,
+    uno o due test (parametro `mode`):
+
+    TEST SULLA MEDIA (mode "mean" o "both"):
 
         ref_k = media di m_{k-t}, ..., m_{k-1}
         stabile  se  |m_k - ref_k| / max(ref_k, delta) < eps          (tolleranza relativa)
@@ -18,6 +41,15 @@ class WarmupDetector:
     oppure, se si passa absTol, con tolleranza ASSOLUTA (in clienti, eps e delta si ignorano):
 
         stabile  se  |m_k - ref_k| < absTol
+
+    TEST SULLA PENDENZA (mode "slope" o "both"): regressione lineare delle t+1 medie m_{k-t}, ..., m_k
+    contro il numero di finestra; la pendenza non deve essere distinguibile da zero:
+
+        stabile  se  |pendenza| <= c * SE(pendenza)
+
+    con SE dai residui della regressione e c il quantile t di Student al 95% (con t+1-2 gradi di libertà),
+    oppure un valore fisso `slopeZ`. Il rumore entra nel criterio: la soglia si adatta da sola.
+    Con "both" devono valere entrambi i test.
 
     La finestra k è "stabile" se lo sono TUTTE le variabili. Il warm-up è finito quando si hanno
     `confirm` finestre stabili consecutive: il detector lo segnala (warmupDone, detectionTime,
@@ -33,12 +65,20 @@ class WarmupDetector:
 
     def __init__(self, windowSize: int, variables: tuple[str, ...] = ("queueInLoco", "queueOnLine", "queueTotal"),
                  t: int = 5, eps: float = 0.05, delta: float = 1.0, confirm: int = 2,
-                 absTol: float | None = None) -> None:
+                 absTol: float | None = None, mode: str = "both", slopeZ: float | None = None) -> None:
         if windowSize < 1 or t < 1 or confirm < 1:
             raise ValueError("windowSize, t e confirm devono essere >= 1")
         if eps <= 0 or delta <= 0 or (absTol is not None and absTol <= 0):
             raise ValueError("eps, delta e absTol devono essere > 0")
         self.absTol = absTol
+        if mode not in MODES:
+            raise ValueError(f"mode deve essere uno di {MODES}")
+        if mode != "mean" and t < 2:
+            raise ValueError("il test sulla pendenza richiede t >= 2")
+        if slopeZ is not None and slopeZ <= 0:
+            raise ValueError("slopeZ deve essere > 0")
+        self.mode = mode
+        self.slopeZ = slopeZ
         self.windowSize = windowSize
         self.t = t
         self.eps = eps
@@ -107,14 +147,26 @@ class WarmupDetector:
             return False
         for v in self.variables:
             means = self.windowMeans[v]
-            ref = sum(means[k - self.t:k]) / self.t
-            diff = abs(means[k] - ref)
-            if self.absTol is not None:
-                if diff >= self.absTol:
-                    return False
-            elif diff / max(ref, self.delta) >= self.eps:
+            if self.mode in ("mean", "both") and not self._meanStable(means, k):
+                return False
+            if self.mode in ("slope", "both") and not self._slopeStable(means, k):
                 return False
         return True
+
+
+    def _meanStable(self, means: list[float], k: int) -> bool:
+        ref = sum(means[k - self.t:k]) / self.t
+        diff = abs(means[k] - ref)
+        if self.absTol is not None:
+            return diff < self.absTol
+        return diff / max(ref, self.delta) < self.eps
+
+
+    def _slopeStable(self, means: list[float], k: int) -> bool:
+        slope, se = linearSlope(means[k - self.t:k + 1])
+        dof = self.t - 1                                    # (t+1) punti - 2
+        crit = self.slopeZ if self.slopeZ is not None else (_T95[dof - 1] if dof <= len(_T95) else 1.96)
+        return abs(slope) <= crit * se
 
 
     def _checkWarmupEnd(self, time: int) -> None:
