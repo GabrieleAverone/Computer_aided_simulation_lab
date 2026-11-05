@@ -65,11 +65,10 @@ class Parameters:
     # warm-up automatica (WarmupDetector su clienti in attesa e frazione di taxi occupati)
     warmupAuto: bool = False            # True = le statistiche partono quando il detector dichiara finita la warm-up
     warmupBatch: int = 50
-    warmupK: int = 10
-    warmupEps: float = 0.05
+    warmupWindow: int = 20              # numero di batch means in finestra
+    warmupZ: float = 2.0                # la media è "crescente" se sale di più di z errori standard
     warmupPatience: int = 5
     warmupMinT: int = 500
-    warmupAbsTol: float = 0.5
     warmupMaxT: int | None = None       # None = maxTime
 
     def capacityList(self) -> list[int]:
@@ -492,8 +491,8 @@ class Simulation:
         p = self.p
         self.warmupDetector = self.tickSeries = None
         if p.warmupAuto:
-            kw = dict(batch=p.warmupBatch, k=p.warmupK, eps=p.warmupEps, patience=p.warmupPatience,
-                      min_t=p.warmupMinT, abs_tol=p.warmupAbsTol, max_t=p.warmupMaxT or p.maxTime)
+            kw = dict(batch=p.warmupBatch, window=p.warmupWindow, z=p.warmupZ, patience=p.warmupPatience,
+                      min_t=p.warmupMinT, max_t=p.warmupMaxT or p.maxTime)
             self.warmupDetector = MultiWarmupDetector([WarmupDetector(**kw), WarmupDetector(**kw)])
             self.tickSeries = ([], [])      # per tick: clienti in attesa, frazione taxi occupati
         self.metrics = Metrics(standsCoord, p.maxTime if p.warmupAuto else p.warmupTime, p.maxTime)

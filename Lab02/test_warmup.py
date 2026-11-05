@@ -31,5 +31,5 @@ def test_multi_waits_for_all():
     m = MultiWarmupDetector([WarmupDetector(max_t=9999), WarmupDetector(max_t=9999)])
     rng = np.random.default_rng(3)
     for t in range(8000):
-        m.update(t, (5 + rng.normal(0, .1), 5 * (1 - np.exp(-t / 800))))
+        m.update(t, (5 + rng.normal(0, .1), 5 * (1 - np.exp(-t / 800)) + rng.normal(0, .1)))
     assert m.stationary is True and m.warmup_end == max(d.warmup_end for d in m.detectors)
