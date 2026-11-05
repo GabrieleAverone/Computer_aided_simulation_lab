@@ -104,7 +104,7 @@ def blockCheck(Y: np.ndarray, delta: int, maxTime: int, **thr) -> dict:
     return blockCheckRow(verticalMean(Y), delta, maxTime, **thr)
 
 
-def idleSaturated(y: np.ndarray, delta: int, maxTime: int, nTaxi: int, idleTol: float = 0.01) -> bool:
+def idleSaturated(y: np.ndarray, delta: int, maxTime: int, nTaxi: int, idleTol: float = 0.005) -> bool:
     """Conferma da idleTaxi: True se nella seconda metà della run la frazione media di taxi liberi
     (idleTaxi / nTaxi) è sotto idleTol, cioè i taxi sono praticamente sempre occupati (ρ ≈ 1 o oltre)."""
     x = intervalCenters(len(y), delta)
@@ -112,7 +112,7 @@ def idleSaturated(y: np.ndarray, delta: int, maxTime: int, nTaxi: int, idleTol: 
 
 
 def stabilityPerReplica(Y: dict, delta: int, maxTime: int, nTaxi: int | None = None,
-                        idleTol: float = 0.01, **thr) -> dict:
+                        idleTol: float = 0.005, **thr) -> dict:
     """Per ogni replica: instabile se ALMENO UNA coda cresce, oppure (se nTaxi è noto) se nella seconda
     metà i taxi liberi sono in media meno di idleTol * nTaxi (idleSaturated). Poi riassunto sulla
     configurazione: pUnstable = frazione di repliche instabili; label = stabile (0), instabile (1)
@@ -131,7 +131,7 @@ def stabilityPerReplica(Y: dict, delta: int, maxTime: int, nTaxi: int | None = N
 # Analisi di una configurazione
 # ------------------------------------------------------------------
 def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 10, 20),
-            nTaxi: int | None = None, idleTol: float = 0.01, **trendThresholds) -> dict:
+            nTaxi: int | None = None, idleTol: float = 0.005, **trendThresholds) -> dict:
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
         welch      : per metrica, {w: curva} per ogni w ammesso (w <= m/4)

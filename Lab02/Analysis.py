@@ -22,7 +22,7 @@ def meanAndCI(values: list[float]) -> tuple[float, float]:
 
 
 def analyzeStability(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...],
-                     nTaxi: int | None = None, idleTol: float = 0.01, **trendThresholds: float) -> dict:
+                     nTaxi: int | None = None, idleTol: float = 0.005, **trendThresholds: float) -> dict:
     """Curve di Welch + controllo a blocchi nella seconda metà della run.
     Il test è per replica: status = "stable" / "metastable" / "unstable" (label stabile/metastabile/instabile),
     pUnstable = frazione di repliche con una coda che cresce o con taxi liberi < idleTol * nTaxi."""
