@@ -157,7 +157,7 @@ class Simulation:
     # ============================== API PUBBLICA ==============================
 
     def run(self, nReplications: int = 10, seed: int | None = None, verbose: bool = True,
-            welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (1, 2, 5, 10, 20),
+            welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (20,),
             returnSeries: bool = False, trendRelTol: float | None = None, trendAbsTol: float | None = None,
             plotFolders: bool = True, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
