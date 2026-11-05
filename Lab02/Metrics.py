@@ -7,6 +7,20 @@ class Metrics:
         self.warmup = warmup
         self.endTime = endTime
 
+        self.standPositions = list(standPositions)
+        self.lastTime = 0
+        self._resetMeasures()
+
+        # --- stato a tratti costante (per il metodo di Welch) ---
+        # il k-esimo valore vale nell'intervallo [segEnds[k-1], segEnds[k]) (segEnds[-1] = 0)
+        self.segEnds = []
+        self.segIdleTaxi = []
+        self.segQueueInLoco = []
+        self.segQueueOnLine = []
+
+
+    def _resetMeasures(self) -> None:
+        """Azzera contatori e accumulatori (non le serie a tratti per Welch né lastTime)."""
         # --- contatori ---
         self.nUsers = 0          # clienti generati
         self.nRide = 0           # corse completate (conteggiate all'arrivo a destinazione)
@@ -24,9 +38,7 @@ class Metrics:
         self.nRebalance = 0           # numero di taxi ribilanciati
 
         # --- integrali nel tempo (aggiornati da update) ---
-        self.lastTime = 0
         self.onLineQueueAcc = 0
-        self.standPositions = list(standPositions)
         self.idleTaxiAccPerStand = {pos: 0 for pos in self.standPositions}
         self.queueAccPerStand = {pos: 0 for pos in self.standPositions}
         self.maxQueuePerStand = {pos: 0 for pos in self.standPositions}
@@ -35,12 +47,13 @@ class Metrics:
         self.nUserInLocoPerStand = {pos: 0 for pos in self.standPositions}
         self.waitedInLocoAccPerStand = {pos: 0 for pos in self.standPositions}
 
-        # --- stato a tratti costante (per il metodo di Welch) ---
-        # il k-esimo valore vale nell'intervallo [segEnds[k-1], segEnds[k]) (segEnds[-1] = 0)
-        self.segEnds = []
-        self.segIdleTaxi = []
-        self.segQueueInLoco = []
-        self.segQueueOnLine = []
+
+    def restartMeasurement(self, time: int) -> None:
+        """Scarta quanto misurato finora e fa ripartire la finestra di misura da `time`
+        (usato quando il warm-up detector segnala la fine del transitorio).
+        Da chiamare subito dopo update(time), così lo stato è integrato fino a `time`."""
+        self.warmup = time
+        self._resetMeasures()
 
 
     # ------------------------------------------------------------------
