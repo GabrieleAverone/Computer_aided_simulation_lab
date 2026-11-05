@@ -104,13 +104,23 @@ def blockCheck(Y: np.ndarray, delta: int, maxTime: int, **thr) -> dict:
     return blockCheckRow(verticalMean(Y), delta, maxTime, **thr)
 
 
-def stabilityPerReplica(Y: dict, delta: int, maxTime: int, **thr) -> dict:
-    """Per ogni replica: instabile se ALMENO UNA coda cresce (idleTaxi escluso). Poi riassunto
-    sulla configurazione: pUnstable = frazione di repliche instabili; label = stabile (0),
-    instabile (1) o metastabile (in mezzo)."""
+def idleSaturated(y: np.ndarray, delta: int, maxTime: int, nTaxi: int, idleTol: float = 0.01) -> bool:
+    """Conferma da idleTaxi: True se nella seconda metà della run la frazione media di taxi liberi
+    (idleTaxi / nTaxi) è sotto idleTol, cioè i taxi sono praticamente sempre occupati (ρ ≈ 1 o oltre)."""
+    x = intervalCenters(len(y), delta)
+    return bool(y[x > maxTime / 2].mean() / nTaxi < idleTol)
+
+
+def stabilityPerReplica(Y: dict, delta: int, maxTime: int, nTaxi: int | None = None,
+                        idleTol: float = 0.01, **thr) -> dict:
+    """Per ogni replica: instabile se ALMENO UNA coda cresce, oppure (se nTaxi è noto) se nella seconda
+    metà i taxi liberi sono in media meno di idleTol * nTaxi (idleSaturated). Poi riassunto sulla
+    configurazione: pUnstable = frazione di repliche instabili; label = stabile (0), instabile (1)
+    o metastabile (in mezzo)."""
     n = Y[QUEUE_METRICS[0]].shape[0]
     unstableRep = np.array([
         any(blockCheckRow(Y[k][j], delta, maxTime, **thr)["unstable"] for k in QUEUE_METRICS)
+        or (nTaxi is not None and idleSaturated(Y["idleTaxi"][j], delta, maxTime, nTaxi, idleTol))
         for j in range(n)])
     p = float(unstableRep.mean())
     label = "stabile" if p == 0 else ("instabile" if p == 1 else "metastabile")
@@ -121,12 +131,12 @@ def stabilityPerReplica(Y: dict, delta: int, maxTime: int, **thr) -> dict:
 # Analisi di una configurazione
 # ------------------------------------------------------------------
 def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 10, 20),
-            **trendThresholds) -> dict:
+            nTaxi: int | None = None, idleTol: float = 0.01, **trendThresholds) -> dict:
     """Analisi completa. Restituisce:
         Y, ybar    : per metrica, matrice n x m e media verticale
         welch      : per metrica, {w: curva} per ogni w ammesso (w <= m/4)
         trend      : per metrica, blockCheck() sulla media verticale (solo per i grafici)
-        unstableReplicas, pUnstable, label : test per replica (stabilityPerReplica; soglie relTol, absTol)
+        unstableReplicas, pUnstable, label : test per replica (stabilityPerReplica; soglie relTol, absTol; più idle < idleTol * nTaxi)
         unstable   : True se almeno una replica è instabile (label != "stabile")
     """
     Y = buildMatrices(allSeries, maxTime, delta)
@@ -135,7 +145,7 @@ def analyze(allSeries: list[dict], maxTime: int, delta: int = 100, ws=(1, 2, 5, 
     okWs = [w for w in ws if w <= m / 4]
     welch = {k: {w: welchMovingAverage(ybar[k], w) for w in okWs} for k in METRICS}
     trend = {k: blockCheck(Y[k], delta, maxTime, **trendThresholds) for k in METRICS}
-    perRep = stabilityPerReplica(Y, delta, maxTime, **trendThresholds)
+    perRep = stabilityPerReplica(Y, delta, maxTime, nTaxi, idleTol, **trendThresholds)
     return {"delta": delta, "m": m, "ws": okWs, "Y": Y, "ybar": ybar,
             "welch": welch, "trend": trend, "unstable": perRep["pUnstable"] > 0,
             "pUnstable": perRep["pUnstable"], "label": perRep["label"],

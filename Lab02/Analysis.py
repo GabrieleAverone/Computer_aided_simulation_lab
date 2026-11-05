@@ -22,11 +22,11 @@ def meanAndCI(values: list[float]) -> tuple[float, float]:
 
 
 def analyzeStability(stateSeries: list[dict], maxTime: int, delta: int, ws: tuple[int, ...],
-                     **trendThresholds: float) -> dict:
+                     nTaxi: int | None = None, idleTol: float = 0.01, **trendThresholds: float) -> dict:
     """Curve di Welch + controllo a blocchi nella seconda metà della run.
     Il test è per replica: status = "stable" / "metastable" / "unstable" (label stabile/metastabile/instabile),
-    pUnstable = frazione di repliche con una coda che cresce."""
-    a = Welch.analyze(stateSeries, maxTime, delta, ws, **trendThresholds)
+    pUnstable = frazione di repliche con una coda che cresce o con taxi liberi < idleTol * nTaxi."""
+    a = Welch.analyze(stateSeries, maxTime, delta, ws, nTaxi, idleTol, **trendThresholds)
     status = {"stabile": "stable", "metastabile": "metastable", "instabile": "unstable"}[a["label"]]
     return {"status": status, "unstable": a["unstable"], "pUnstable": a["pUnstable"], "label": a["label"],
             "unstableReplicas": a["unstableReplicas"],
@@ -42,6 +42,6 @@ def printWelch(r: dict) -> None:
         print(f"    {k}: 2a metà a blocchi (media repliche): {blocks} (aumento {t['rise']:+.3f}){flag}")
     n = len(r["unstableReplicas"])
     print(f"    repliche instabili: {int(r['unstableReplicas'].sum())}/{n} (pUnstable = {r['pUnstable']:.2f})")
-    print("    ESITO: " + {"stable": "STABILE (nessuna replica con coda crescente nella 2a metà)",
-                           "metastable": "METASTABILE (alcune repliche con coda crescente)",
+    print("    ESITO: " + {"stable": "STABILE (nessuna replica con coda crescente o taxi saturi nella 2a metà)",
+                           "metastable": "METASTABILE (alcune repliche con coda crescente o taxi sempre occupati)",
                            "unstable": "INSTABILE (tutte le repliche con coda crescente)"}[r["status"]])

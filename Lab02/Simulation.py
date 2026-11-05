@@ -136,7 +136,7 @@ class Simulation:
 
     def run(self, nReplications: int = 10, seed: int | None = None, verbose: bool = True,
             welch: bool = True, welchDelta: int = 100, welchWs: tuple[int, ...] = (1, 2, 5, 10, 20),
-            trendRelTol: float | None = None, trendAbsTol: float | None = None,
+            trendRelTol: float | None = None, trendAbsTol: float | None = None, idleTol: float = 0.01,
             plotFolders: bool = True, **overrides) -> dict:
         """Lancia nReplications repliche con i parametri di base modificati da overrides
         (solo per questa run) e salva i risultati. Restituisce un dizionario con
@@ -149,7 +149,9 @@ class Simulation:
           trendRelTol, trendAbsTol : soglie del controllo (None = default di Welch.blockCheckRow: 0.25, 2.0 clienti).
                                   La 2a metà della run è divisa in 4 blocchi: una replica è instabile se, per almeno una
                                   coda (in loco / online), le medie dei blocchi crescono sempre e l'aumento
-                                  (ultimo - primo) supera max(trendRelTol * livello medio, trendAbsTol)
+                                  (ultimo - primo) supera max(trendRelTol * livello medio, trendAbsTol).
+                                  Instabile anche se nella 2a metà i taxi liberi sono in media < idleTol * nTaxi
+                                  (idleTol=0.01: taxi praticamente sempre tutti occupati)
           plotFolders           : True = i grafici di ogni run vanno in plots/<parametri>/ (es. plots/nTaxi=6_reachProb=0.3/);
                                   False = tutti insieme in plots/
         """
@@ -174,7 +176,7 @@ class Simulation:
 
         thresholds = {"relTol": trendRelTol, "absTol": trendAbsTol}
         thresholds = {k: v for k, v in thresholds.items() if v is not None}
-        welchResult = (Analysis.analyzeStability(stateSeries, self.p.maxTime, welchDelta, welchWs, **thresholds)
+        welchResult = (Analysis.analyzeStability(stateSeries, self.p.maxTime, welchDelta, welchWs, self.p.nTaxi, idleTol, **thresholds)
                        if welch else None)
 
         # per results.csv (vuoto senza welch): `stable` per replica, `pUnstable` per configurazione
