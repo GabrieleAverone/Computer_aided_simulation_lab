@@ -12,6 +12,7 @@ from User import User
 from Events import Event
 from FutureEventSet import FutureEventSet
 from Metrics import Metrics
+from WarmupDetector import WarmupDetector
 import Analysis
 import Output
 from Analysis import meanAndCI
@@ -60,6 +61,7 @@ class Parameters:
     # durata
     maxTime: int = 50000
     warmupTime: int = 100               # transitorio iniziale escluso dalle statistiche
+    warmupWindow: int = 500             # eventi per finestra del warm-up detector
 
     def capacityList(self) -> list[int]:
         if self.capacity is None:
@@ -84,6 +86,8 @@ class Parameters:
             raise ValueError("arrivalRate * TIME_STEP_MIN deve essere in (0, 1]")
         if not 0 <= self.warmupTime < self.maxTime:
             raise ValueError("serve 0 <= warmupTime < maxTime")
+        if self.warmupWindow < 1:
+            raise ValueError("warmupWindow deve essere >= 1")
 
 
 # =============================== SIMULATION ===============================
@@ -126,6 +130,7 @@ class Simulation:
         # stato della replica in corso
         self.p: Parameters
         self.metrics: Metrics
+        self.warmupDetector: WarmupDetector
         self.taxiStands: TaxiStands
         self.FES: FutureEventSet
         self.logFile: TextIO | None = None
@@ -164,11 +169,12 @@ class Simulation:
         self.plotsDir = Output.makePlotsDir(self.outDir, overrides, plotFolders)
         logPath = self.outDir / "logs" / f"{runId}.txt" if self.log else None
 
-        globalReports, standReports, stateSeries = [], [], []
+        globalReports, standReports, stateSeries, warmupMeans = [], [], [], []
         for i, replicaSeed in enumerate(replicaSeeds):
             g, s = self.runReplica(replicaSeed, logPath if i == 0 else None)
             globalReports.append(g)
             standReports.append(s)
+            warmupMeans.append(self.warmupDetector.windowMeans)
             if welch:
                 stateSeries.append(self.metrics.stateSeries())
 
@@ -197,7 +203,7 @@ class Simulation:
                 Analysis.printWelch(welchResult)
 
         return {"runId": runId, "seed": seedSeq.entropy, "params": asdict(self.p), "plotsDir": str(self.plotsDir),
-                "replicas": globalReports, "standReports": standReports, "mean": mean, "ci": ci,
+                "warmupWindowMeans": warmupMeans, "replicas": globalReports, "standReports": standReports, "mean": mean, "ci": ci,
                 "welch": None if welchResult is None else {k: v for k, v in welchResult.items() if k != "analysis"}}
 
 
@@ -459,6 +465,7 @@ class Simulation:
         self.taxiStands.distributeTaxi(self.p.nTaxi, policy=self.p.policy)
 
         self.metrics = Metrics(standsCoord, self.p.warmupTime, self.p.maxTime)
+        self.warmupDetector = WarmupDetector(self.p.warmupWindow)
 
         self.FES = FutureEventSet()
         self.FES.insertEvent(self.createSpawnEvent(0))
@@ -483,6 +490,11 @@ class Simulation:
                     break
 
                 self.metrics.update(time, self.taxiStands)
+                if self.warmupDetector.update(time, {
+                        "queueInLoco": self.taxiStands.getTotalInLoco(),
+                        "queueOnLine": self.taxiStands.getTotalOnline()}):
+                    self.writeLog(f"Warm-up detector, window {self.warmupDetector.nWindows - 1} closed: "
+                                  f"{ {v: m[-1] for v, m in self.warmupDetector.windowMeans.items()} }")
 
                 handler = self.handlers.get(currentEvent.getType())
                 if handler is None:
