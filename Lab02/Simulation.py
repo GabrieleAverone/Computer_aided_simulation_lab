@@ -67,7 +67,6 @@ class Parameters:
     warmupDelta: float = 1.0            # warm-up detector: soglia minima del denominatore (evita /0)
     warmupAbsTol: float | None = None   # warm-up detector: se impostata, tolleranza ASSOLUTA in clienti (al posto di eps/delta)
     warmupMode: str = "both"            # warm-up detector: "mean" (confronto con la media), "slope" (pendenza) o "both" (entrambi)
-    warmupSlopeZ: float | None = None   # warm-up detector: soglia sulla pendenza in errori standard (None = quantile t al 95%)
     warmupConfirm: int = 2              # warm-up detector: finestre stabili consecutive per segnalare la fine
 
     def capacityList(self) -> list[int]:
@@ -99,8 +98,6 @@ class Parameters:
             raise ValueError("warmupMode deve essere 'mean', 'slope' o 'both'")
         if self.warmupMode != "mean" and self.warmupT < 2:
             raise ValueError("con il test sulla pendenza warmupT deve essere >= 2")
-        if self.warmupSlopeZ is not None and self.warmupSlopeZ <= 0:
-            raise ValueError("warmupSlopeZ deve essere > 0")
         if self.warmupEps <= 0 or self.warmupDelta <= 0 or (self.warmupAbsTol is not None and self.warmupAbsTol <= 0):
             raise ValueError("warmupEps, warmupDelta e warmupAbsTol devono essere > 0")
 
@@ -457,7 +454,7 @@ class Simulation:
         self.metrics = Metrics(standsCoord, self.p.warmupTime, self.p.maxTime)
         self.warmupDetector = WarmupDetector(self.p.warmupWindow, t=self.p.warmupT, eps=self.p.warmupEps,
                                               delta=self.p.warmupDelta, confirm=self.p.warmupConfirm,
-                                              absTol=self.p.warmupAbsTol, mode=self.p.warmupMode, slopeZ=self.p.warmupSlopeZ)
+                                              absTol=self.p.warmupAbsTol, mode=self.p.warmupMode)
 
         self.FES = FutureEventSet()
         self.FES.insertEvent(self.createSpawnEvent(0))
